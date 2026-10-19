@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="description" content="Suivi de portefeuille sans connexion bancaire. Vos données restent sur votre téléphone.">
+<meta name="theme-color" content="#0F172A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Octant">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%230F172A'/%3E%3Ctext x='90' y='122' font-size='96' font-family='Arial' font-weight='bold' text-anchor='middle' fill='%237DD3FC'%3EO%3C/text%3E%3Ccircle cx='90' cy='90' r='10' fill='%2334D399'/%3E%3C/svg%3E">
+<link rel="manifest" href='data:application/manifest+json,{"name":"Octant · Suivi de portefeuille","short_name":"Octant","start_url":".","display":"standalone","background_color":"%230F172A","theme_color":"%230F172A","icons":[{"src":"data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 512 512%27%3E%3Crect width=%27512%27 height=%27512%27 rx=%27110%27 fill=%27%230F172A%27/%3E%3Ctext x=%27256%27 y=%27340%27 font-size=%27260%27 font-family=%27Arial%27 font-weight=%27bold%27 text-anchor=%27middle%27 fill=%27%237DD3FC%27%3EO%3C/text%3E%3Ccircle cx=%27256%27 cy=%27256%27 r=%2730%27 fill=%27%2334D399%27/%3E%3C/svg%3E","sizes":"512x512","type":"image/svg+xml"}]}'>
+<title>Octant · Suivi de portefeuille</title>
+<style>
+  :root {
+    --bg: #0F172A; --card: #16213A; --card2: #1E293B; --line: #7DD3FC;
+    --text: #F1F5F9; --muted: #94A3B8; --accent: #38BDF8; --green: #34D399;
+    --pos: #4ADE80; --neg: #FB7185; --danger: #F87171;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+    background: var(--bg); color: var(--text); padding-bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+  /* ---------- En-tete ---------- */
+  header { padding: calc(18px + env(safe-area-inset-top)) 18px 10px; }
+  .titre {
+    font-size: clamp(19px, 6vw, 24px); font-weight: 800; letter-spacing: .2px;
+    background: linear-gradient(90deg, #7DD3FC 0%, #34D399 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+  }
+  .signature { margin-top: 3px; font-size: 11px; font-style: italic; color: var(--green); opacity: .85; }
+  .maj { margin-top: 4px; font-size: 10px; color: var(--muted); }
+  .majrow { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; gap: 8px; }
+  .majbtn { padding: 5px 10px; font-size: 12px; border-radius: 9px; flex: 0 0 auto; }
+  /* ---------- Cartes KPI ---------- */
+  .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 6px 18px 4px; }
+  .kpi { background: var(--card2); border-radius: 14px; padding: 10px 12px 9px; }
+  .kpi .lbl { font-size: 9px; font-weight: 700; letter-spacing: .8px; color: var(--muted); text-transform: uppercase; }
+  .kpi .val { font-size: 19px; font-weight: 800; margin-top: 2px; white-space: nowrap; }
+  .pos { color: var(--pos); } .neg { color: var(--neg); }
+  /* ---------- Sections ---------- */
+  main { padding: 12px 0 24px; }
+  h2 { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; padding: 14px 18px 8px; }
+  .groupe { margin: 0 14px 12px; background: var(--card); border-radius: 16px; overflow: hidden; }
+  .groupe .ghead {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 10px 14px 8px; font-weight: 700; font-size: 13px; color: var(--line);
+  }
+  .groupe .gsub { font-size: 11px; color: var(--muted); font-weight: 500; }
+  .ligne { padding: 9px 14px; border-top: 1px solid rgba(148,163,184,.12); cursor: pointer; }
+  .ligne:active { background: rgba(56,189,248,.08); }
+  .ligne .l1 { display: flex; justify-content: space-between; align-items: baseline; }
+  .ligne .nom { font-size: 14px; font-weight: 600; }
+  .ligne .meta { font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .ligne .montant { font-size: 14px; font-weight: 700; }
+  .ligne .l2 { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
+  .ligne .pct { font-size: 10px; color: var(--muted); white-space: nowrap; }
+  .barre { height: 4px; border-radius: 2px; background: rgba(148,163,184,.18); flex: 1; margin: 0 10px; overflow: hidden; }
+  .barre > div { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--line)); }
+  .stotal {
+    display: flex; justify-content: space-between; padding: 9px 14px;
+    border-top: 1px solid rgba(148,163,184,.18); font-size: 12px; font-weight: 700;
+    background: rgba(30,41,59,.55);
+  }
+  .total {
+    margin: 0 14px; display: flex; justify-content: space-between; align-items: baseline;
+    padding: 12px 16px; border-radius: 14px; background: var(--card2);
+    border-top: 2px solid var(--line); border-bottom: 2px solid var(--line); font-weight: 800;
+  }
+  .total .tval { font-size: 18px; }
+  /* ---------- Boutons ---------- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border: none; border-radius: 12px; padding: 11px 16px; font-size: 13px; font-weight: 700;
+    background: var(--accent); color: #062033; cursor: pointer; font-family: inherit;
+  }
+  .btn:active { opacity: .85; }
+  .btn.ghost { background: var(--card2); color: var(--text); }
+  .btn.danger { background: rgba(248,113,113,.15); color: var(--danger); }
+  .btn.wide { width: 100%; }
+  .actions { display: flex; flex-direction: column; gap: 10px; padding: 4px 18px; }
+  .fab {
+    position: fixed; right: 18px; bottom: calc(86px + env(safe-area-inset-bottom));
+    width: 54px; height: 54px; border-radius: 18px; border: none; cursor: pointer;
+    background: linear-gradient(135deg, #7DD3FC, #34D399); color: #062033;
+    font-size: 30px; font-weight: 300; line-height: 1; box-shadow: 0 6px 18px rgba(56,189,248,.35);
+  }
+  /* ---------- Nav du bas ---------- */
+  nav {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    display: flex; padding-bottom: env(safe-area-inset-bottom);
+    background: rgba(15,23,42,.92); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-top: 1px solid rgba(148,163,184,.15);
+  }
+  nav button {
+    flex: 1; padding: 10px 0 8px; background: none; border: none; cursor: pointer;
+    color: var(--muted); font-family: inherit; font-size: 10px; font-weight: 600;
+  }
+  nav button .ic { display: block; font-size: 20px; margin-bottom: 2px; }
+  nav button.actif { color: var(--accent); }
+  /* ---------- Graphiques ---------- */
+  .chartcard { background: var(--card); border-radius: 16px; margin: 0 14px 14px; padding: 14px; }
+  .chartcard h3 { font-size: 13px; color: var(--green); margin-bottom: 10px; }
+  .donutflex { display: flex; align-items: center; gap: 14px; }
+  .legende { flex: 1; font-size: 11px; line-height: 1.9; }
+  .legende .dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; }
+  .legende .p { float: right; color: var(--muted); }
+  .centre { font-size: 11px; fill: var(--muted); }
+  .centre .v { font-size: 15px; font-weight: 800; fill: var(--text); }
+  .vide { text-align: center; color: var(--muted); font-size: 12px; padding: 18px; line-height: 1.7; }
+  .vide b { color: var(--text); }
+  /* ---------- Modal ---------- */
+  .voile {
+    position: fixed; inset: 0; z-index: 60; background: rgba(4,10,22,.66);
+    display: none; align-items: flex-end; justify-content: center;
+  }
+  .voile.ouvert { display: flex; }
+  .feuille {
+    width: 100%; max-width: 480px; max-height: 88vh; overflow-y: auto;
+    background: var(--card); border-radius: 22px 22px 0 0; padding: 18px 18px calc(18px + env(safe-area-inset-bottom));
+  }
+  .feuille h3 { color: var(--green); font-size: 15px; margin-bottom: 12px; }
+  label { display: block; font-size: 10px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); margin: 10px 0 4px; }
+  input, select {
+    width: 100%; padding: 11px 12px; border-radius: 11px; border: 1px solid rgba(148,163,184,.25);
+    background: var(--bg); color: var(--text); font-size: 14px; font-family: inherit;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .deux { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .factions { display: flex; gap: 10px; margin-top: 16px; }
+  .factions .btn { flex: 1; }
+  /* ---------- Reglages ---------- */
+  .reglage { background: var(--card); border-radius: 16px; margin: 0 14px 14px; padding: 14px; }
+  .reglage p { font-size: 11px; color: var(--muted); line-height: 1.6; margin-bottom: 8px; }
+  .reglage code { background: rgba(56,189,248,.12); color: var(--line); padding: 1px 5px; border-radius: 5px; font-size: 10px; }
+  /* ---------- Toast ---------- */
+  #toast {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(96px + env(safe-area-inset-bottom));
+    background: var(--card2); color: var(--text); border: 1px solid rgba(125,211,252,.3);
+    padding: 10px 16px; border-radius: 12px; font-size: 12px; z-index: 80; max-width: 88%;
+    text-align: center; transition: opacity .3s; opacity: 0; pointer-events: none;
+  }
+  #toast.vu { opacity: 1; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="titre">Octant · Suivi de portefeuille</div>
+    <div class="signature">Tes placements en un coup d’œil, cours actualisés chaque jour, sans connexion bancaire.</div>
+    <div class="majrow"><span class="maj" id="maj"></span><button class="btn majbtn" onclick="majCours()" title="Mettre à jour les cours">🔄</button></div>
+  </header>
+  <main id="vue"></main>
+  <button class="fab" id="fab" title="Ajouter un actif">+</button>
+  <nav>
+    <button data-tab="pf" class="actif"><span class="ic">📋</span>Portefeuille</button>
+    <button data-tab="an"><span class="ic">📊</span>Analyse</button>
+    <button data-tab="rg"><span class="ic">⚙️</span>Réglages</button>
+  </nav>
+  <div class="voile" id="voile"><div class="feuille" id="feuille"></div></div>
+  <div id="toast"></div>
+
+<script>
+'use strict';
+/* =====================================================================
+   Octant · Suivi de portefeuille — PWA autonome, sans connexion bancaire.
+   Toutes les donnees restent dans le stockage local de ce telephone
+   (localStorage). Export / import JSON : tes donnees t'appartiennent.
+
+   HEBERGEMENT (Netlify recommande — cours automatiques sans clé API) :
+   1. Renommer ce fichier index.html et organiser :
+         index.html                    <- ce fichier
+         netlify/functions/cours.js    <- code ci-dessous (cours Yahoo, en euros)
+         sw.js                         <- code ci-dessous (optionnel : hors ligne Android)
+   2. Glisser le DOSSIER complet sur https://app.netlify.com/drop -> URL https.
+      Mise a jour ulterieure : redéposer le dossier sur l'onglet Deploys du site.
+   3. Installer : "Ajouter a l'ecran d'accueil" (iPhone : tel quel ; Android :
+      avec sw.js).
+   La fonction cours.js interroge Yahoo Finance (comme la version Sheets),
+   couvre Euronext (CW8, AIR.PA, IWDA.AS...), convertit en euros et sert
+   les cours a l'app. Aucune clé API, rien a configurer pour l'acheteur.
+
+      // netlify/functions/cours.js
+      const YCHART = 'https://query1.finance.yahoo.com/v8/finance/chart/';
+      const YSEARCH = 'https://query1.finance.yahoo.com/v1/finance/search?q=';
+      const ENTETES = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' };
+      const MARCHES_EURO = /\.(PA|AS|L|MI|DE|MC|BR|SW|NX)/;
+
+      async function yahoo(symbole) {
+        const r = await fetch(YCHART + encodeURIComponent(symbole) + '?interval=1d&range=1d', { headers: ENTETES });
+        if (!r.ok) return null;
+        const j = await r.json();
+        const res = j && j.chart && j.chart.result && j.chart.result[0];
+        const prix = res && res.meta && res.meta.regularMarketPrice;
+        if (!prix) return null;
+        return { prix: prix, devise: (res.meta.currency || '') };
+      }
+
+      // Le code saisi par l'utilisateur est souvent le mnemonique Euronext
+      // (DCAM, AL, BNP...), pas le ticker Yahoo. Resolution en 3 etapes :
+      // 1. le code tel quel ; 2. recherche Yahoo sur le code sans suffixe,
+      // marche europeen privilegie ; 3. recherche par le nom de l'actif.
+      async function chercher(q) {
+        const r = await fetch(YSEARCH + encodeURIComponent(q) + '&quotesCount=8&newsCount=0', { headers: ENTETES });
+        if (!r.ok) return null;
+        const j = await r.json();
+        const quotes = (j.quotes || []).filter(x => x.symbol);
+        const euro = quotes.find(x => MARCHES_EURO.test(x.symbol));
+        return (euro || quotes[0] || {}).symbol || null;
+      }
+      async function resoudre(code, nom) {
+        let q = await yahoo(code);
+        if (q) return q;
+        const s1 = await chercher(code.split('.')[0]);
+        if (s1) { q = await yahoo(s1); if (q) return q; }
+        if (nom) {
+          const s2 = await chercher(nom);
+          if (s2) { q = await yahoo(s2); if (q) return q; }
+        }
+        return null;
+      }
+
+      exports.handler = async (event) => {
+        const p = event.queryStringParameters || {};
+        const codes = String(p.codes || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 40);
+        const noms = String(p.noms || '').split('|');
+        const resultat = {}, echecs = [], taux = {};
+        for (let i = 0; i < codes.length; i++) {
+          try {
+            const q = await resoudre(codes[i].toUpperCase(), (noms[i] || '').trim());
+            if (!q) { echecs.push(codes[i]); continue; }
+            let prix = q.prix;
+            if (q.devise && q.devise !== 'EUR') {
+              if (!(q.devise in taux)) {
+                const t = await yahoo('EUR' + q.devise + '=X');   // 1 EUR = X devise
+                taux[q.devise] = t ? t.prix : 0;
+              }
+              if (taux[q.devise]) prix = prix / taux[q.devise];   // conversion en euros
+            }
+            resultat[codes[i].toUpperCase()] = prix;
+          } catch (e) { echecs.push(codes[i]); }
+        }
+        return { statusCode: 200, headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify({ resultat: resultat, echecs: echecs }) };
+      };
+
+      // sw.js (optionnel : hors ligne + installation Android complete)
+      const C = 'octant-v1';
+      self.addEventListener('install', e => self.skipWaiting());
+      self.addEventListener('fetch', e => {
+        if (e.request.url.indexOf('/.netlify/functions/') !== -1) {   // cours : réseau d'abord
+          e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+          return;
+        }
+        e.respondWith(
+          caches.open(C).then(c => c.match(e.request).then(r => {
+            const f = fetch(e.request).then(res => {
+              if (res.ok) c.put(e.request, res.clone());
+              return res;
+            }).catch(() => r);
+            return r || f;
+          }))
+        );
+      });
+      self.addEventListener('activate', e => e.waitUntil(
+        caches.keys().then(ks => Promise.all(ks.filter(k => k !== C).map(k => caches.delete(k))))
+      ));
+
+   Sur iPhone, l'installation fonctionne des maintenant sans sw.js.
+   ===================================================================== */
+
+var PALETTE = ['#38BDF8','#A78BFA','#F472B6','#34D399','#FBBF24','#22D3EE','#FB923C','#C084FC','#4ADE80','#F87171'];
+var CLE = 'octant';
+var etat = charger();
+
+/* ---------- Stockage local ---------- */
+function charger() {
+  try { return JSON.parse(localStorage.getItem(CLE)) || vide(); } catch (e) { return vide(); }
+  function vide() { return { actifs: [], historique: [], cleApi: '', derniereMajIso: '' }; }
+}
+function sauver() { localStorage.setItem(CLE, JSON.stringify(etat)); }
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+/* ---------- Formatage ---------- */
+function eur(v) { return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(v || 0); }
+function eur2(v) { return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(v || 0); }
+function pct(v) { return (v >= 0 ? '+' : '') + (v * 100).toFixed(2).replace('.', ',') + ' %'; }
+function dateFR(iso) { var t = iso.split('-'); return t[2] + '/' + t[1] + '/' + t[0]; }
+
+/* ---------- Secteurs & zones : reconnaissance automatique ---------- */
+/* Profils intégrés des ETF les plus courants (répartitions indicatives,
+   stables à quelques points par an) : les débutants n'ont rien à saisir.
+   Un champ accepte un libellé simple (« Tech ») ou pondéré (« Tech 60; Santé 40 »). */
+var PROFILES_ETF = [
+  { m: ['ACWI', 'ALL COUNTRY', 'DCAM'], sec: 'Technologie 32; Financier 16; Santé 12; Industrie 10; Consommation 11; Autres 19', zone: 'USA 63; Europe 15; Asie-Pacifique 15; Autres 7' },
+  { m: ['WORLD'], sec: 'Technologie 32; Financier 16; Santé 13; Industrie 11; Consommation 10; Autres 18', zone: 'USA 70; Europe 15; Asie-Pacifique 15' },
+  { m: ['S&P', '500', 'US EQUITY', 'ETATS-UNIS'], sec: 'Technologie 33; Financier 17; Santé 12; Industrie 9; Consommation 21; Autres 8', zone: 'USA 100' },
+  { m: ['NASDAQ'], sec: 'Technologie 60; Communication 15; Consommation 12; Santé 8; Autres 5', zone: 'USA 100' },
+  { m: ['EUROPE', 'STOXX', '600'], sec: 'Financier 20; Industrie 17; Santé 16; Consommation 13; Technologie 12; Autres 22', zone: 'Europe 100' },
+  { m: ['EMERGING', 'EM IMI', 'PAEEM'], sec: 'Technologie 28; Financier 22; Consommation 12; Industrie 10; Autres 28', zone: 'Asie-Pacifique 75; Amérique latine 10; Europe 10; Autres 5' },
+  { m: ['JAPON', 'JAPAN', 'NIPPON'], sec: 'Technologie 25; Industrie 20; Consommation 12; Financier 12; Autres 31', zone: 'Japon 100' },
+  { m: ['GOLD', 'OR PHYSIQUE', 'XAU'], sec: 'Or 100', zone: 'Monde 100' },
+  { m: ['IMMO', 'SCPI', 'REIT'], sec: 'Immobilier 100', zone: 'Monde 100' }
+];
+var TICKERS_ETF = {
+  'DCAM': 0, 'PAEEM': 5, 'ETZ': 4, 'EMIM': 5,
+  'CW8': 1, 'SWSH': 1, 'IWDA': 1, 'SWDA': 1,   // ETF « World »
+  'SXR8': 2,                                    // S&P 500
+  'GOLD': 7                                     // ETF or
+};
+function profilETF(nom, code) {
+  var base = String(code || '').toUpperCase().split('.')[0];
+  if (TICKERS_ETF[base] !== undefined) return PROFILES_ETF[TICKERS_ETF[base]];
+  var hay = (String(nom || '') + ' ' + String(code || '')).toUpperCase();
+  for (var i = 0; i < PROFILES_ETF.length; i++) {
+    for (var j = 0; j < PROFILES_ETF[i].m.length; j++) {
+      if (hay.indexOf(PROFILES_ETF[i].m[j]) !== -1) return PROFILES_ETF[i];
+    }
+  }
+  return null;
+}
+function parseEtiquettes(txt) {
+  var parts = String(txt || '').split(';'), out = [], tot = 0;
+  parts.forEach(function (p) {
+    p = p.trim(); if (!p) return;
+    var m = p.match(/^(.+?)[\s]+([\d.,]+)$/);
+    var o = m ? { label: m[1].trim(), poids: parseFloat(m[2].replace(',', '.')) || 1 }
+              : { label: p, poids: 1 };
+    out.push(o); tot += o.poids;
+  });
+  out.forEach(function (o) { o.part = tot ? o.poids / tot : 0; });
+  return out;
+}
+function zoneDepuisSuffixe(c) {
+  var s = String(c || '').toUpperCase();
+  if (s.indexOf('.') === -1) return '';
+  var suf = s.substring(s.indexOf('.'));
+  if (suf === '.PA' || suf === '.NX') return 'France';
+  if (suf === '.AS') return 'Pays-Bas';
+  if (suf === '.L') return 'Royaume-Uni';
+  if (suf === '.DE' || suf === '.F' || suf === '.SG' || suf === '.BE') return 'Allemagne';
+  if (suf === '.MI') return 'Italie';
+  if (suf === '.MC') return 'Espagne';
+  if (suf === '.BR') return 'Belgique';
+  if (suf === '.SW') return 'Suisse';
+  if (suf === '.TO' || suf === '.V') return 'Canada';
+  if (suf === '.AX' || suf === '.NZ' || suf === '.HK' || suf === '.T' ||
+      suf === '.SS' || suf === '.SZ' || suf === '.KS' || suf === '.KQ') return 'Asie-Pacifique';
+  return 'Monde';
+}
+/* Suggestion hors ligne pour un actif : profil ETF, puis heuristiques
+   (cash, livret, fonds en euros), puis zone déduite du suffixe du code. */
+function suggestion(nom, code) {
+  var p = profilETF(nom, code);
+  if (p) return { sec: p.sec, zone: p.zone, via: 'ETF reconnu : répartition intégrée' };
+  var nu = String(nom || '').toUpperCase();
+  if (!code) {
+    if (nu.indexOf('LIVRET') !== -1 || nu.indexOf('CASH') !== -1 ||
+        nu.indexOf('ESPÈCES') !== -1 || nu.indexOf('ESPECES') !== -1)
+      return { sec: 'Cash', zone: 'Cash', via: 'Cash : exclu des camemberts' };
+    if (nu.indexOf('FONDS') !== -1 || nu.indexOf('EURO') !== -1)
+      return { sec: 'Obligations', zone: 'France', via: 'Fonds en euros' };
+    return null;
+  }
+  var z = zoneDepuisSuffixe(code);
+  if (z) return { sec: '', zone: z, via: 'Zone déduite du code' };
+  return null;
+}
+
+/* ---------- Calculs ---------- */
+function montants(a) { return { inv: (a.qte || 0) * (a.pru || 0), val: (a.qte || 0) * (a.cours || 0) }; }
+function totaux() {
+  var inv = 0, val = 0;
+  etat.actifs.forEach(function (a) { var m = montants(a); inv += m.inv; val += m.val; });
+  return { inv: inv, val: val, pv: val - inv, pvp: inv ? (val - inv) / inv : 0 };
+}
+function groupes() {
+  var g = {};
+  etat.actifs.forEach(function (a) {
+    var s = (a.support || 'Autre').trim() || 'Autre';
+    (g[s] = g[s] || []).push(a);
+  });
+  return Object.keys(g).sort(function (x, y) {
+    var vx = 0, vy = 0;
+    g[x].forEach(function (a) { vx += montants(a).val; });
+    g[y].forEach(function (a) { vy += montants(a).val; });
+    return vy - vx;
+  }).map(function (s) { return { nom: s, actifs: g[s] }; });
+}
+function repartition(champ) {
+  var m = {}, ordre = [];
+  etat.actifs.forEach(function (a) {
+    var lib = ((champ === 'secteur' ? a.secteur : a.zone) || '').trim();
+    if (!lib) return;
+    if (lib.toUpperCase() === 'CASH') return;              // le cash n'est pas une exposition
+    var mnt = montants(a).val;
+    parseEtiquettes(lib).forEach(function (p) {             // « Tech 60; Santé 40 » ou « Tech »
+      m[p.label] = (m[p.label] || 0) + mnt * p.part;
+      if (ordre.indexOf(p.label) === -1) ordre.push(p.label);
+    });
+  });
+  return ordre.map(function (l) { return { label: l, val: m[l] }; }).sort(function (x, y) { return y.val - x.val; });
+}
+
+/* ---------- Composants SVG ---------- */
+function donut(items) {
+  var total = 0; items.forEach(function (i) { total += i.val; });
+  if (!total) return '<div class="vide">Aucune donnée.<br>« ' + (items.champ || 'Secteur') + ' » se remplit automatiquement :<br>profils ETF reconnus depuis le nom ou le code,<br>ou bouton 🪄 dans l\'onglet Analyse.</div>';
+  var C = 2 * Math.PI * 40, off = 0, segs = '';
+  items.forEach(function (i, k) {
+    var len = i.val / total * C;
+    segs += '<circle r="40" cx="60" cy="60" fill="none" stroke="' + PALETTE[k % PALETTE.length] +
+      '" stroke-width="18" stroke-dasharray="' + len + ' ' + (C - len) + '" stroke-dashoffset="' + (-off) +
+      '" transform="rotate(-90 60 60)"/>';
+    off += len;
+  });
+  var centre = '<text x="60" y="56" text-anchor="middle" class="centre">Total</text>' +
+    '<text x="60" y="74" text-anchor="middle" class="centre v">' + eur(total) + '</text>';
+  var leg = items.map(function (i, k) {
+    return '<div><span class="dot" style="background:' + PALETTE[k % PALETTE.length] + '"></span>' +
+      i.label + '<span class="p">' + Math.round(i.val / total * 100) + '&thinsp;%</span></div>';
+  }).join('');
+  return '<div class="donutflex"><svg width="120" height="120" viewBox="0 0 120 120">' + segs + centre +
+    '</svg><div class="legende">' + leg + '</div></div>';
+}
+function courbe() {
+  var h = etat.historique;
+  if (h.length < 1) return '<div class="vide">Aucun point encore.<br>Utilise « Enregistrer un point » juste au-dessus<br>pour démarrer la courbe de ton patrimoine.</div>';
+  var W = 320, H = 140, P = 8;
+  var vs = h.map(function (p) { return p.valeur; });
+  var min = Math.min.apply(null, vs), max = Math.max.apply(null, vs);
+  if (max === min) { max += 1; min -= 1; }
+  var X = function (i) { return h.length === 1 ? W / 2 : P + i * (W - 2 * P) / (h.length - 1); };
+  var Y = function (v) { return H - P - (v - min) / (max - min) * (H - 2 * P); };
+  var pts = h.map(function (p, i) { return X(i).toFixed(1) + ',' + Y(p.valeur).toFixed(1); }).join(' ');
+  var aires = P + ',' + (H - P) + ' ' + pts + ' ' + (h.length === 1 ? W / 2 : W - P) + ',' + (H - P);
+  var dots = h.map(function (p, i) {
+    return '<circle cx="' + X(i) + '" cy="' + Y(p.valeur) + '" r="3.5" fill="#7DD3FC"/>';
+  }).join('');
+  return '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="display:block">' +
+    '<polygon points="' + aires + '" fill="rgba(56,189,248,.13)"/>' +
+    '<polyline points="' + pts + '" fill="none" stroke="#38BDF8" stroke-width="2.5" stroke-linejoin="round"/>' +
+    dots +
+    '<text x="' + P + '" y="12" font-size="9" fill="#94A3B8">' + eur(max) + '</text>' +
+    '<text x="' + P + '" y="' + (H - 2) + '" font-size="9" fill="#94A3B8">' + eur(min) + '</text>' +
+    '</svg><div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted)">' +
+    '<span>' + dateFR(h[0].date) + '</span><span>' + dateFR(h[h.length - 1].date) + '</span></div>';
+}
+
+/* ---------- Rendus ---------- */
+var vue = document.getElementById('vue');
+function rendre(tab) {
+  var t = totaux();
+  var auj = new Date().toISOString().slice(0, 10);
+  var elMaj = document.getElementById('maj');
+  if (etat.derniereMajIso === auj) elMaj.textContent = 'Cours actualisés automatiquement aujourd\'hui ✓';
+  else if (etat.derniereMaj) elMaj.textContent = 'Cours actualisés chaque jour à l\'ouverture — dernier : ' + etat.derniereMaj;
+  else elMaj.textContent = 'Actualisation automatique quotidienne à l\'ouverture de l\'app';
+  if (tab === 'pf') rendrePortefeuille(t);
+  else if (tab === 'an') rendreAnalyse(t);
+  else rendreReglages();
+}
+function rendrePortefeuille(t) {
+  var h = '';
+  if (!etat.actifs.length) {
+    h = '<div class="vide" style="margin:30px 18px"><b>Bienvenue sur Octant 👋</b><br><br>' +
+      'Ajoute ton premier actif avec le bouton <b>+</b> :<br>action, ETF, fonds en euros, livret…<br>' +
+      'Aucune connexion bancaire, aucune inscription.<br>Tes données restent sur ton téléphone.</div>';
+  } else {
+    h = '<div class="kpis">' +
+      kpi('Valeur totale', eur(t.val), '') +
+      kpi('Total investi', eur(t.inv), '') +
+      kpi('Plus-value', eur(t.pv), t.pv >= 0 ? 'pos' : 'neg') +
+      kpi('Plus-value', pct(t.pvp), t.pv >= 0 ? 'pos' : 'neg') + '</div>';
+    groupes().forEach(function (g) {
+      var gi = 0, gv = 0;
+      g.actifs.forEach(function (a) { var m = montants(a); gi += m.inv; gv += m.val; });
+      var tri = g.actifs.slice().sort(function (a, b) { return montants(b).val - montants(a).val; });
+      var maxVal = montants(tri[0]).val || 1;
+      h += '<h2>' + g.nom + '</h2><div class="groupe"><div class="ghead"><span>' + g.nom +
+        '</span><span class="gsub">' + eur(gv) + '</span></div>';
+      tri.forEach(function (a) {
+        var m = montants(a), part = t.val ? m.val / t.val : 0;
+        h += '<div class="ligne" onclick="ouvrirActif(\'' + a.id + '\')">' +
+          '<div class="l1"><span><span class="nom">' + a.nom + '</span><br>' +
+          '<span class="meta">' + (a.code || 'sans code') + ' · ' + a.qte + ' × ' + eur2(a.cours) + '</span></span>' +
+          '<span class="montant">' + eur(m.val) + '</span></div>' +
+          '<div class="l2"><span class="pct ' + (m.val - m.inv >= 0 ? 'pos' : 'neg') + '">' + eur(m.val - m.inv) + '</span>' +
+          '<span class="barre"><div style="width:' + Math.max(3, Math.round(part * 100)) + '%"></div></span>' +
+          '<span class="pct">' + Math.round(part * 100) + '&thinsp;%</span></div></div>';
+      });
+      h += '<div class="stotal"><span>Sous-total ' + g.nom + '</span><span>' + eur(gv - gi) +
+        ' <span class="' + (gv - gi >= 0 ? 'pos' : 'neg') + '">(' + pct(gi ? (gv - gi) / gi : 0) + ')</span></span></div></div>';
+    });
+    h += '<div class="total"><span>TOTAL</span><span class="' + (t.pv >= 0 ? 'pos' : 'neg') + ' tval">' +
+      eur(t.val) + ' · ' + pct(t.pvp) + '</span></div>';
+    h += '<div class="actions" style="margin-top:14px"><button class="btn" onclick="majCours()">🔄 Mettre à jour les cours</button></div>';
+  }
+  vue.innerHTML = h;
+}
+function kpi(l, v, cls) { return '<div class="kpi"><div class="lbl">' + l + '</div><div class="val ' + cls + '">' + v + '</div></div>'; }
+function rendreAnalyse(t) {
+  var parSupport = groupes().map(function (g) {
+    var v = 0; g.actifs.forEach(function (a) { v += montants(a).val; });
+    return { label: g.nom, val: v };
+  });
+  var h = '<div class="kpis">' +
+    kpi('Valeur totale', eur(t.val), '') +
+    kpi('Plus-value', pct(t.pvp), t.pv >= 0 ? 'pos' : 'neg') + '</div>';
+  h += '<div class="actions" style="margin:10px 0 14px;flex-direction:row"><button class="btn" style="flex:1" onclick="ajouterPoint()">📌 Enregistrer un point</button>' +
+    '<button class="btn ghost" style="flex:1" onclick="completerEtiquettes()">🪄 Compléter secteurs &amp; zones</button></div>';
+  h += '<div class="chartcard"><h3>Évolution du patrimoine</h3>' + courbe() + '</div>';
+  h += '<div class="chartcard"><h3>Répartition par support</h3>' + donut(parSupport) + '</div>';
+  var sec = repartition('secteur'); sec.champ = 'Secteur';
+  h += '<div class="chartcard"><h3>Secteurs</h3>' + donut(sec) + '</div>';
+  var zon = repartition('zone'); zon.champ = 'Zone';
+  h += '<div class="chartcard"><h3>Zones géographiques</h3>' + donut(zon) + '</div>';
+  vue.innerHTML = h;
+}
+function rendreReglages() {
+  vue.innerHTML =
+    '<h2>Cours automatiques</h2>' +
+    '<div class="reglage"><p>📅 <b>Une fois par jour, à l\'ouverture de l\'app</b>, tes cours se mettent à jour tout seuls ' +
+    '(le bouton 🔄 force une mise à jour à tout moment). ' +
+    'Hébergée sur Netlify avec le dossier fourni (index.html + <code>netlify/functions/cours.js</code>), ' +
+    'aucune clé n\'est nécessaire : Euronext couvert (CW8, AIR.PA, IWDA.AS…), cours convertis en euros automatiquement.<br><br>' +
+    '<b>Repli</b> (hébergement sans la fonction, titres américains uniquement) : ' +
+    'clé gratuite <code>Twelve Data</code> (twelvedata.com, 800 req/jour), collée ci-dessous. Elle reste sur ton téléphone.</p>' +
+    '<input id="cleApi" type="text" placeholder="Clé Twelve Data (facultatif)" value="' + (etat.cleApi || '') + '">' +
+    '<div style="margin-top:10px"><button class="btn" onclick="sauverCle()">💾 Enregistrer la clé</button></div></div>' +
+    '<h2>Mes données</h2>' +
+    '<div class="reglage"><p>Tes données restent dans le stockage local de ce téléphone : ' +
+    'aucun serveur, aucune connexion bancaire. Exporte-les pour les sauvegarder ou les transférer.</p>' +
+    '<div class="factions"><button class="btn ghost" onclick="exporter()">⬇️ Exporter (JSON)</button>' +
+    '<button class="btn ghost" onclick="document.getElementById(\'imp\').click()">⬆️ Importer</button></div>' +
+    '<input type="file" id="imp" accept=".json" style="display:none" onchange="importer(this)"></div>' +
+    '<h2>À propos</h2>' +
+    '<div class="reglage"><p><b>Octant · Suivi de portefeuille</b> — tes placements en un coup d’œil, cours actualisés chaque jour, sans connexion bancaire.<br><br>' +
+    'Cours indicatifs, parfois retardés. Outil de suivi personnel, pas un conseil en investissement.</p></div>';
+}
+
+/* ---------- CRUD actifs ---------- */
+var voile = document.getElementById('voile'), feuille = document.getElementById('feuille');
+function ouvrirForm(id) {
+  var a = id ? etat.actifs.filter(function (x) { return x.id === id; })[0] : null;
+  var supports = groupes().map(function (g) { return g.nom; });
+  var opts = ['PEA', 'Assurance vie', 'CTO', 'Livret A', 'PER', 'Autre']
+    .concat(supports).filter(function (v, i, s) { return s.indexOf(v) === i; })
+    .map(function (s) { return '<option' + ((a ? a.support : 'PEA') === s ? ' selected' : '') + '>' + s + '</option>'; }).join('');
+  feuille.innerHTML =
+    '<h3>' + (a ? 'Modifier l\'actif' : 'Nouvel actif') + '</h3>' +
+    '<label>Support</label><select id="f_support">' + opts + '</select>' +
+    '<label>Nom de l\'actif</label><input id="f_nom" placeholder="ex : Amundi MSCI World" value="' + (a ? a.nom : '') + '">' +
+    '<div class="deux"><div><label>Code (ticker)</label><input id="f_code" placeholder="ex : CW8.PA" value="' + (a ? a.code : '') + '"></div>' +
+    '<div><label>Quantité</label><input id="f_qte" type="number" inputmode="decimal" placeholder="ex : 12,5" value="' + (a ? a.qte : '') + '"></div></div>' +
+    '<div class="deux"><div><label>PRU (€)</label><input id="f_pru" type="number" inputmode="decimal" step="any" placeholder="prix moyen" value="' + (a ? a.pru : '') + '"></div>' +
+    '<div><label>Cours (€)</label><input id="f_cours" type="number" inputmode="decimal" step="any" placeholder="actuel" value="' + (a ? a.cours : '') + '"></div></div>' +
+    '<div class="deux"><div><label>Secteur</label><input id="f_secteur" placeholder="auto ou ex : Cash" value="' + (a ? (a.secteur || '') : '') + '"></div>' +
+    '<div><label>Zone</label><input id="f_zone" placeholder="auto ou ex : USA" value="' + (a ? (a.zone || '') : '') + '"></div></div>' +
+    '<div id="f_auto" style="font-size:10px;color:var(--green);min-height:14px;margin-top:6px"></div>' +
+    '<div class="factions"><button class="btn" onclick="validerForm(' + (a ? '\'' + a.id + '\'' : 'null') + ')">✓ Enregistrer</button>' +
+    '<button class="btn ghost" onclick="fermerForm()">Annuler</button></div>' +
+    (a ? '<div class="factions"><button class="btn danger" onclick="supprimer(\'' + a.id + '\')">🗑 Supprimer cet actif</button></div>' : '');
+  ['f_nom', 'f_code'].forEach(function (f) { document.getElementById(f).addEventListener('input', autoEtiquettes); });
+  ['f_secteur', 'f_zone'].forEach(function (f) {
+    document.getElementById(f).addEventListener('input', function () {
+      this.dataset.auto = ''; this.dataset.manuel = '1';
+      var h = document.getElementById('f_auto'); if (h) h.textContent = '';
+    });
+  });
+  autoEtiquettes();
+  voile.classList.add('ouvert');
+}
+/* Remplissage automatique de Secteur et Zone pendant la saisie :
+   ne touche jamais une valeur saisie ou déjà présente à la main. */
+function autoEtiquettes() {
+  var fs = document.getElementById('f_secteur'), fz = document.getElementById('f_zone');
+  var hint = document.getElementById('f_auto');
+  if (!fs || !fz) return;
+  var s = suggestion(document.getElementById('f_nom').value.trim(), document.getElementById('f_code').value.trim());
+  var poser = function (el, v) {
+    if (el.value && !el.dataset.auto) return;            // saisi à la main : on préserve
+    if (v) { el.value = v; el.dataset.auto = '1'; }
+    else { el.value = ''; el.dataset.auto = ''; }
+  };
+  if (!s) { poser(fs, ''); poser(fz, ''); if (hint) hint.textContent = ''; return; }
+  poser(fs, s.sec); poser(fz, s.zone);
+  if (hint) hint.textContent = '🪄 ' + s.via + ' — modifiable';
+}
+function fermerForm() { voile.classList.remove('ouvert'); }
+function validerForm(id) {
+  var g = function (f) { return document.getElementById(f).value.trim(); };
+  var n = function (f) { var v = document.getElementById(f).value.replace(',', '.'); return v === '' ? 0 : parseFloat(v); };
+  var nom = g('f_nom');
+  if (!nom) { toast('Donne un nom à ton actif.'); return; }
+  var objet = {
+    id: id || uid(), support: g('f_support') || 'Autre', nom: nom,
+    code: g('f_code'), qte: n('f_qte'), pru: n('f_pru'), cours: n('f_cours'),
+    secteur: g('f_secteur'), zone: g('f_zone')
+  };
+  if (!objet.cours) objet.cours = objet.pru;
+  var i = etat.actifs.map(function (x) { return x.id; }).indexOf(objet.id);
+  if (i === -1) etat.actifs.push(objet); else etat.actifs[i] = objet;
+  sauver(); fermerForm(); rendre(onglet); toast('✓ ' + nom + ' enregistré');
+}
+function supprimer(id) {
+  etat.actifs = etat.actifs.filter(function (a) { return a.id !== id; });
+  sauver(); fermerForm(); rendre(onglet); toast('Actif supprimé');
+}
+function ouvrirActif(id) { ouvrirForm(id); }
+voile.addEventListener('click', function (e) { if (e.target === voile) fermerForm(); });
+
+/* ---------- Historique ---------- */
+function ajouterPoint() {
+  var t = totaux();
+  var auj = new Date().toISOString().slice(0, 10);
+  etat.historique = etat.historique.filter(function (p) { return p.date !== auj; });
+  etat.historique.push({ date: auj, investi: t.inv, valeur: t.val });
+  etat.historique.sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+  sauver(); rendre(onglet); toast('📌 Point du ' + dateFR(auj) + ' enregistré');
+}
+
+/* ---------- Toast + sauvegarde de la clé de repli ---------- */
+function toast(msg) {
+  var el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('vu');
+  clearTimeout(el._t); el._t = setTimeout(function () { el.classList.remove('vu'); }, 3200);
+}
+function sauverCle() {
+  etat.cleApi = document.getElementById('cleApi').value.trim();
+  sauver(); toast('✓ Clé enregistrée');
+}
+/* ---------- Mise a jour des cours : quotidienne automatique + bouton ---------- */
+/* Appelée automatiquement à l'ouverture de l'app (une fois par jour) et via
+   le bouton 🔄. Source principale : la fonction Netlify cours.js (proxy Yahoo
+   Finance, couvre Euronext, convertit en euros, aucune clé). Repli si
+   l'app est hébergée sans la fonction : Twelve Data (titres US, clé perso). */
+function majCours(auto) {
+  var cibles = etat.actifs.filter(function (a) { return a.code; });
+  if (!cibles.length) { if (!auto) toast('Aucun actif avec un code de cotation.'); return; }
+  if (!auto) toast('⏳ Actualisation de ' + cibles.length + ' cours...');
+  var codes = cibles.map(function (a) { return a.code; }).join(',');
+  var noms = cibles.map(function (a) { return (a.nom || '').replace(/[|,]/g, ' '); }).join('|');
+  fetch('/.netlify/functions/cours?codes=' + encodeURIComponent(codes) + '&noms=' + encodeURIComponent(noms))
+    .then(function (r) { if (!r.ok) throw new Error('fonction'); return r.json(); })
+    .then(function (d) {
+      var ok = 0, echecs = (d && d.echecs) || [];
+      cibles.forEach(function (a) {
+        var p = d && d.resultat && (d.resultat[String(a.code).toUpperCase()] || d.resultat[a.code]);
+        if (p) { a.cours = p; ok++; }
+        else if (echecs.indexOf(a.code) === -1) echecs.push(a.code);
+      });
+      finMaj(auto, ok, echecs);
+    })
+    .catch(function () {
+      if (etat.cleApi) majCoursTwelveData(auto, cibles);
+      else finMaj(auto, 0, cibles.map(function (a) { return a.code; }));
+    });
+}
+function finMaj(auto, ok, echecs) {
+  if (ok) {
+    etat.derniereMaj = new Date().toLocaleDateString('fr-FR');
+    etat.derniereMajIso = new Date().toISOString().slice(0, 10);
+  }
+  sauver(); rendre(onglet);
+  if (auto) { if (ok) toast('🔄 Cours actualisés automatiquement (' + ok + ')'); }
+  else if (ok) toast(ok + ' cours actualisés' + (echecs.length ? ' — échecs : ' + echecs.join(', ') : ' ✓'));
+  else toast('Échec de l\'actualisation — héberge l\'app avec la fonction cours.js (mode d\'emploi en tête de fichier) ou ajoute une clé Twelve Data dans Réglages.');
+}
+/* Repli Twelve Data : un appel par titre (limite gratuite 8/minute). */
+function majCoursTwelveData(auto, cibles) {
+  var ok = 0, echecs = [];
+  (function suivant(i) {
+    if (i >= cibles.length) { finMaj(auto, ok, echecs); return; }
+    var a = cibles[i];
+    fetch('https://api.twelvedata.com/price?symbol=' + encodeURIComponent(a.code) + '&apikey=' + etat.cleApi)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.price) { a.cours = parseFloat(d.price); ok++; }
+        else echecs.push(a.code);
+      })
+      .catch(function () { echecs.push(a.code); })
+      .then(function () {
+        var delai = ((i + 1) % 8 === 0 && i + 1 < cibles.length) ? 61000 : 250;
+        if (delai > 250 && !auto) toast('⏳ Limite gratuite (8/min) — reprise dans 1 min…');
+        setTimeout(function () { suivant(i + 1); }, delai);
+      });
+  })(0);
+}
+
+/* ---------- Compléter secteurs & zones (reconnaissance hors ligne + API) ---------- */
+var TRAD_PAYS = { 'United States': 'USA', 'United Kingdom': 'Royaume-Uni', 'Japan': 'Japon',
+  'Germany': 'Allemagne', 'Netherlands': 'Pays-Bas', 'Switzerland': 'Suisse', 'Italy': 'Italie',
+  'Spain': 'Espagne', 'Belgium': 'Belgique', 'France': 'France' };
+function completerEtiquettes() {
+  var cibles = etat.actifs.filter(function (a) { return !(a.secteur && a.zone); });
+  if (!cibles.length) { toast('✓ Secteurs et zones déjà renseignés'); return; }
+  var viaApi = [];
+  cibles.forEach(function (a) {
+    var s = suggestion(a.nom, a.code);
+    if (s) {
+      if (s.sec && !a.secteur) a.secteur = s.sec;
+      if (s.zone && !a.zone) a.zone = s.zone;
+    }
+    if (a.code && a.code.indexOf('.') === -1 && !a.zone && etat.cleApi) viaApi.push(a);
+  });
+  var finir = function () {
+    sauver(); rendre(onglet);
+    var restes = etat.actifs.filter(function (a) { return !a.secteur || !a.zone; }).map(function (a) { return a.nom; });
+    var msg = '🪄 ' + (cibles.length - restes.length) + ' actif(s) complété(s) automatiquement';
+    if (restes.length) msg += ' — secteur/zone à saisir à la main : ' + restes.slice(0, 4).join(', ') + (restes.length > 4 ? '…' : '');
+    toast(msg);
+  };
+  if (!viaApi.length) { finir(); return; }
+  toast('⏳ Recherche du pays pour ' + viaApi.length + ' code(s)...');
+  (function suivant(i) {
+    if (i >= viaApi.length) { finir(); return; }
+    var a = viaApi[i];
+    fetch('https://api.twelvedata.com/stocks?symbol=' + encodeURIComponent(a.code) + '&apikey=' + etat.cleApi)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var pays = d && d.data && d.data[0] && d.data[0].country;
+        if (pays && !a.zone) a.zone = TRAD_PAYS[pays] || pays;
+      })
+      .catch(function () {})
+      .then(function () { setTimeout(function () { suivant(i + 1); }, 250); });  // respecte la limite gratuite
+  })(0);
+}
+
+/* ---------- Export / import ---------- */
+function exporter() {
+  var blob = new Blob([JSON.stringify(etat, null, 2)], { type: 'application/json' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'octant-portefeuille.json';
+  a.click(); URL.revokeObjectURL(a.href);
+  toast('⬇️ Export téléchargé');
+}
+function importer(input) {
+  var f = input.files[0]; if (!f) return;
+  var fr = new FileReader();
+  fr.onload = function () {
+    try {
+      var d = JSON.parse(fr.result);
+      if (!d.actifs) throw new Error('format');
+      etat = d; sauver(); rendre(onglet); toast('⬆️ Données importées ✓');
+    } catch (e) { toast('Fichier invalide.'); }
+  };
+  fr.readAsText(f);
+}
+
+/* ---------- Navigation ---------- */
+var onglet = 'pf';
+document.querySelectorAll('nav button').forEach(function (b) {
+  b.addEventListener('click', function () {
+    onglet = b.dataset.tab;
+    document.querySelectorAll('nav button').forEach(function (x) { x.classList.toggle('actif', x === b); });
+    rendre(onglet);
+  });
+});
+document.getElementById('fab').addEventListener('click', function () { ouvrirForm(null); });
+
+/* Service worker : actif uniquement une fois le fichier heberge (cf. en-tete du script) */
+if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+  navigator.serviceWorker.register('sw.js').catch(function () {});
+}
+rendre(onglet);
+/* Actualisation quotidienne automatique : une fois par jour, à l'ouverture
+   de l'app — le seul moment où une PWA sans serveur peut agir. Silencieuse :
+   le bandeau d'en-tête affiche le résultat, la signature reste vraie. */
+if (etat.derniereMajIso !== new Date().toISOString().slice(0, 10) &&
+    etat.actifs.some(function (a) { return a.code; })) majCours(true);
+</script>
+</body>
+</html>
