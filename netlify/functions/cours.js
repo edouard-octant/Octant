@@ -5,6 +5,11 @@ const ENTETES = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
 const MARCHES_EURO = /\.(PA|AS|L|MI|DE|MC|BR|SW|NX)/;
 const DELAI = 4000;  // délai max par requête : jamais d'attente infinie
 
+// Mnémoniques Euronext ambigus sur Yahoo : redirection vers le bon ticker.
+// AL = Air Liquide (sur Yahoo, AL.PA désigne un autre titre : le cours était
+// donc faux, ~2768 € au lieu de ~173 €). FP = TotalEnergies.
+const EXCEPTIONS = { 'AL': 'AI.PA', 'FP': 'TTE.PA' };
+
 async function allez(url) {
   const c = new AbortController();
   const t = setTimeout(() => c.abort(), DELAI);
@@ -35,9 +40,10 @@ async function chercher(q) {
   return (euro || quotes[0] || {}).symbol || null;
 }
 async function resoudre(code, nom) {
-  let q = await yahoo(code);
+  const base = code.split('.')[0].toUpperCase();
+  let q = await yahoo(EXCEPTIONS[base] || code);
   if (q) return q;
-  const s1 = await chercher(code.split('.')[0]);
+  const s1 = await chercher(base);
   if (s1) { q = await yahoo(s1); if (q) return q; }
   if (nom) {
     const s2 = await chercher(nom);
