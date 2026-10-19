@@ -35,13 +35,26 @@
   .signature { margin-top: 3px; font-size: 11px; font-style: italic; color: var(--green); opacity: .85; }
   .maj { margin-top: 4px; font-size: 10px; color: var(--muted); }
   .majrow { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; gap: 8px; }
-  .majbtn { padding: 5px 10px; font-size: 12px; border-radius: 9px; flex: 0 0 auto; }
+  /* Bouton d'actualisation : pilule visible en degrade bleu-vert,
+     icone qui tourne pendant la mise a jour (class .tourne) */
+  .btnmaj {
+    display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto;
+    background: linear-gradient(135deg, #38BDF8, #34D399);
+    color: #062033; font-weight: 800; font-size: 12px;
+    padding: 9px 16px; border-radius: 999px; border: none; cursor: pointer; font-family: inherit;
+    box-shadow: 0 3px 12px rgba(56,189,248,.4);
+  }
+  .btnmaj:active { transform: scale(.96); }
+  .btnmaj:disabled { opacity: .8; }
+  .btnmaj .icmaj { display: inline-block; font-size: 14px; line-height: 1; }
+  .btnmaj.tourne .icmaj { animation: tourne .9s linear infinite; }
+  @keyframes tourne { to { transform: rotate(360deg); } }
   /* ---------- Cartes KPI ---------- */
   .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 6px 18px 4px; }
   .kpi { background: var(--card2); border-radius: 14px; padding: 10px 12px 9px; }
   .kpi .lbl { font-size: 9px; font-weight: 700; letter-spacing: .8px; color: var(--muted); text-transform: uppercase; }
   .kpi .val { font-size: 19px; font-weight: 800; margin-top: 2px; white-space: nowrap; }
-  .pos { color: var(--pos) !important; } .neg { color: var(--neg) !important; }
+  .pos { color: var(--pos) !important; } .neg { color: var(--neg) !important; }  /* vert / rouge : priorite sur le gris des lignes */
   /* ---------- Sections ---------- */
   main { padding: 12px 0 24px; }
   h2 { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; padding: 14px 18px 8px; }
@@ -151,7 +164,7 @@
   <header>
     <div class="titre">Octant · Suivi de portefeuille</div>
     <div class="signature">Tes placements en un coup d’œil, cours actualisés chaque jour, sans connexion bancaire.</div>
-    <div class="majrow"><span class="maj" id="maj"></span><button class="btn majbtn" onclick="majCours()" title="Mettre à jour les cours">🔄</button></div>
+    <div class="majrow"><span class="maj" id="maj"></span><button class="btnmaj" id="btnmaj" onclick="majCours()" title="Actualiser les cours"><span class="icmaj">🔄</span> <span id="btnmajlbl">Actualiser les cours</span></button></div>
   </header>
   <main id="vue"></main>
   <button class="fab" id="fab" title="Ajouter un actif">+</button>
@@ -185,36 +198,53 @@
 
       // netlify/functions/cours.js
       const YCHART = 'https://query1.finance.yahoo.com/v8/finance/chart/';
+      const YCHART2 = 'https://query2.finance.yahoo.com/v8/finance/chart/';
       const YSEARCH = 'https://query1.finance.yahoo.com/v1/finance/search?q=';
       const ENTETES = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' };
       const MARCHES_EURO = /\.(PA|AS|L|MI|DE|MC|BR|SW|NX)/;
+      const DELAI = 4000;  // delai max par requete : jamais d'attente infinie
 
-      async function yahoo(symbole) {
-        const r = await fetch(YCHART + encodeURIComponent(symbole) + '?interval=1d&range=1d', { headers: ENTETES });
-        if (!r.ok) return null;
-        const j = await r.json();
-        const res = j && j.chart && j.chart.result && j.chart.result[0];
-        const prix = res && res.meta && res.meta.regularMarketPrice;
-        if (!prix) return null;
-        return { prix: prix, devise: (res.meta.currency || '') };
+      // Fetch borne : renvoie la reponse ou null au bout de DELAI ms
+      async function allez(url) {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), DELAI);
+        try {
+          const r = await fetch(url, { headers: ENTETES, signal: c.signal });
+          return r.ok ? r : null;
+        } catch (e) { return null; }
+        finally { clearTimeout(t); }
       }
-
-      // Le code saisi par l'utilisateur est souvent le mnemonique Euronext
-      // (DCAM, AL, BNP...), pas le ticker Yahoo. Resolution en 3 etapes :
-      // 1. le code tel quel ; 2. recherche Yahoo sur le code sans suffixe,
-      // marche europeen privilegie ; 3. recherche par le nom de l'actif.
+      async function lire(url) {
+        const r = await allez(url);
+        if (!r) return null;
+        try { return await r.json(); } catch (e) { return null; }
+      }
+      // Cours Yahoo : essaie les deux hotes, retourne { prix, devise }
+      async function yahoo(symbole) {
+        for (const h of [YCHART, YCHART2]) {
+          const j = await lire(h + encodeURIComponent(symbole) + '?interval=1d&range=1d');
+          const res = j && j.chart && j.chart.result && j.chart.result[0];
+          const prix = res && res.meta && res.meta.regularMarketPrice;
+          if (prix) return { prix: prix, devise: (res.meta.currency || '') };
+        }
+        return null;
+      }
+      // Le code saisi est souvent le mnemonique Euronext (DCAM, AL, BNP...),
+      // pas le ticker Yahoo. Resolution : exceptions connues (AL = Air Liquide
+      // -> AI.PA, FP = TotalEnergies -> TTE.PA), puis code tel quel, puis
+      // recherche sur le code sans suffixe, puis recherche par le nom de l'actif.
       async function chercher(q) {
-        const r = await fetch(YSEARCH + encodeURIComponent(q) + '&quotesCount=8&newsCount=0', { headers: ENTETES });
-        if (!r.ok) return null;
-        const j = await r.json();
-        const quotes = (j.quotes || []).filter(x => x.symbol);
+        const j = await lire(YSEARCH + encodeURIComponent(q) + '&quotesCount=8&newsCount=0');
+        const quotes = (j && j.quotes || []).filter(x => x.symbol);
         const euro = quotes.find(x => MARCHES_EURO.test(x.symbol));
         return (euro || quotes[0] || {}).symbol || null;
       }
+      const EXCEPTIONS = { 'AL': 'AI.PA', 'FP': 'TTE.PA' };
       async function resoudre(code, nom) {
-        let q = await yahoo(code);
+        const base = code.split('.')[0].toUpperCase();
+        let q = await yahoo(EXCEPTIONS[base] || code);
         if (q) return q;
-        const s1 = await chercher(code.split('.')[0]);
+        const s1 = await chercher(base);
         if (s1) { q = await yahoo(s1); if (q) return q; }
         if (nom) {
           const s2 = await chercher(nom);
@@ -224,27 +254,34 @@
       }
 
       exports.handler = async (event) => {
-        const p = event.queryStringParameters || {};
-        const codes = String(p.codes || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 40);
-        const noms = String(p.noms || '').split('|');
-        const resultat = {}, echecs = [], taux = {};
-        for (let i = 0; i < codes.length; i++) {
-          try {
-            const q = await resoudre(codes[i].toUpperCase(), (noms[i] || '').trim());
-            if (!q) { echecs.push(codes[i]); continue; }
-            let prix = q.prix;
-            if (q.devise && q.devise !== 'EUR') {
-              if (!(q.devise in taux)) {
-                const t = await yahoo('EUR' + q.devise + '=X');   // 1 EUR = X devise
-                taux[q.devise] = t ? t.prix : 0;
+        try {
+          const p = event.queryStringParameters || {};
+          const codes = String(p.codes || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 40);
+          const noms = String(p.noms || '').split('|');
+          const resultat = {}, echecs = [], taux = {};
+          for (let i = 0; i < codes.length; i++) {
+            try {
+              const q = await resoudre(codes[i].toUpperCase(), (noms[i] || '').trim());
+              if (!q) { echecs.push(codes[i]); continue; }
+              let prix = q.prix;
+              if (q.devise && q.devise !== 'EUR') {
+                if (!(q.devise in taux)) {
+                  const t = await yahoo('EUR' + q.devise + '=X');   // 1 EUR = X devise
+                  taux[q.devise] = t ? t.prix : 0;
+                }
+                if (taux[q.devise]) prix = prix / taux[q.devise];   // conversion en euros
               }
-              if (taux[q.devise]) prix = prix / taux[q.devise];   // conversion en euros
-            }
-            resultat[codes[i].toUpperCase()] = prix;
-          } catch (e) { echecs.push(codes[i]); }
+              resultat[codes[i].toUpperCase()] = prix;
+            } catch (e) { echecs.push(codes[i]); }
+          }
+          const diag = resultat && Object.keys(resultat).length
+            ? 'ok' : 'aucun cours obtenu — voir echecs (Yahoo peut bloquer les IP Netlify)';
+          return { statusCode: 200, headers: { 'Content-Type': 'application/json' },
+                   body: JSON.stringify({ resultat: resultat, echecs: echecs, diag: diag }) };
+        } catch (err) {
+          return { statusCode: 200, headers: { 'Content-Type': 'application/json' },
+                   body: JSON.stringify({ erreur: String(err && err.message ? err.message : err) }) };
         }
-        return { statusCode: 200, headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ resultat: resultat, echecs: echecs }) };
       };
 
       // sw.js (optionnel : hors ligne + installation Android complete)
@@ -492,12 +529,12 @@ function rendrePortefeuille(t) {
           '<span class="barre"><div style="width:' + Math.max(3, Math.round(part * 100)) + '%"></div></span>' +
           '<span class="pct">' + Math.round(part * 100) + '&thinsp;%</span></div></div>';
       });
-      h += '<div class="stotal"><span>Sous-total ' + g.nom + '</span><span>' + eur(gv - gi) +
-        ' <span class="' + (gv - gi >= 0 ? 'pos' : 'neg') + '">(' + pct(gi ? (gv - gi) / gi : 0) + ')</span></span></div></div>';
+      h += '<div class="stotal"><span>Sous-total ' + g.nom + '</span><span class="' + (gv - gi >= 0 ? 'pos' : 'neg') + '">' + eur(gv - gi) +
+        ' <span>(' + pct(gi ? (gv - gi) / gi : 0) + ')</span></span></span></div></div>';
     });
-    h += '<div class="total"><span>TOTAL</span><span class="' + (t.pv >= 0 ? 'pos' : 'neg') + ' tval">' +
-      eur(t.val) + ' · ' + pct(t.pvp) + '</span></div>';
-    h += '<div class="actions" style="margin-top:14px"><button class="btn" onclick="majCours()">🔄 Mettre à jour les cours</button></div>';
+    h += '<div class="total"><span>TOTAL</span><span class="tval">' + eur(t.val) + ' · <span class="' +
+      (t.pv >= 0 ? 'pos' : 'neg') + '">' + pct(t.pvp) + '</span></span></div>';
+    h += '<div class="actions" style="margin-top:14px"><button class="btnmaj" onclick="majCours()"><span class="icmaj">🔄</span> Actualiser les cours</button></div>';
   }
   vue.innerHTML = h;
 }
@@ -641,6 +678,9 @@ function sauverCle() {
 function majCours(auto) {
   var cibles = etat.actifs.filter(function (a) { return a.code; });
   if (!cibles.length) { if (!auto) toast('Aucun actif avec un code de cotation.'); return; }
+  var bm = document.getElementById('btnmaj'), bl = document.getElementById('btnmajlbl');
+  if (bm) { bm.disabled = true; bm.classList.add('tourne'); }
+  if (bl) bl.textContent = 'Actualisation…';
   if (!auto) toast('⏳ Actualisation de ' + cibles.length + ' cours...');
   var codes = cibles.map(function (a) { return a.code; }).join(',');
   var noms = cibles.map(function (a) { return (a.nom || '').replace(/[|,]/g, ' '); }).join('|');
@@ -661,6 +701,9 @@ function majCours(auto) {
     });
 }
 function finMaj(auto, ok, echecs) {
+  var bm = document.getElementById('btnmaj'), bl = document.getElementById('btnmajlbl');
+  if (bm) { bm.disabled = false; bm.classList.remove('tourne'); }
+  if (bl) bl.textContent = 'Actualiser les cours';
   if (ok) {
     etat.derniereMaj = new Date().toLocaleDateString('fr-FR');
     etat.derniereMajIso = new Date().toISOString().slice(0, 10);
