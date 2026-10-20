@@ -1,949 +1,259 @@
-// ================================================================
-//  SUIVI DE PORTEFEUILLE PRO — version universelle
-//  Fonctionne avec n'importe quelles actions, ETF et supports.
-//  Un seul endroit a personnaliser : la feuille "Configuration".
-// ----------------------------------------------------------------
-//  INSTALLATION (5 minutes, sans competence technique) :
-//  1. Creer un tableur vierge : drive.google.com > Nouveau > Google Sheets
-//  2. Dans le tableur : Extensions > Apps Script, remplacer tout le code
-//     par celui-ci, puis Enregistrer.
-//  3. Recharger la feuille (F5) : le menu "Suivi du portefeuille" apparait.
-//  4. Menu > "1. Initialiser" > remplir la feuille Configuration.
-//  5. Menu > "2. Reconstruire le tableau" > "3. Mettre à jour les cours".
-//  6. Menu > "4. Installer la mise à jour quotidienne".
-// ================================================================
-
-var TZ = 'Europe/Paris';
-var VERSION_SCRIPT = 28;  // v28 : sécurité des cours — exceptions mnémoniques (AL, FP, WLB, BI), support ISIN, alerte si cours très éloigné du PRU
-var SHEET_CFG  = 'Configuration';
-var SHEET_MAIN = 'Portefeuille';
-var SHEET_EV   = 'Evolution';
-var SHEET_HELP = "Mode d'emploi";
-
-// Couleurs automatiques : plus-values en vert, moins-values en rouge
-var FMT_EUR    = '#,##0.00" €"';
-var FMT_LAT    = '+#,##0.00" €";-#,##0.00" €"';  // couleurs via mise en forme conditionnelle
-var FMT_PCT    = '0.00%';
-var FMT_LATPCT = '+0.00%;-0.00%';
-
-// Direction artistique : fintech sombre moderne — bleu nuit + accents electriques
-var THEME = {
-  bg: '#0F172A',       // fond general : bleu nuit profond
-  zebra: '#16213A',    // lignes alternees : bleu nuit legerement plus clair
-  header: '#1E293B',    // bandeaux d'en-tetes : ardoise
-  subtotal: '#182136', // lignes de sous-total
-  text: '#F1F5F9',     // texte principal : blanc legerement bleute
-  muted: '#94A3B8',    // texte secondaire : gris ardoise
-  accent: '#38BDF8',   // accent : bleu electrique (valeurs cles, courbe, onglets)
-  title: '#34D399',    // vert fintech : titre du tableau et titres des graphiques
-  line: '#7DD3FC',     // bleu clair : filets et bordures
-  total: '#273A5C',    // bandeau du TOTAL : bleu sureleve
-  grid: '#253046',     // grilles des graphiques
-  pos: '#4ADE80',      // plus-values : vert vif
-  neg: '#FB7185'       // moins-values : rose vif
-};
-var NOM_PRODUIT = 'Octant';    // nom du produit affiche en tete du tableau de bord
-var CHART_COLORS = ['#38BDF8', '#A78BFA', '#F472B6', '#34D399', '#FBBF24', '#22D3EE', '#FB923C', '#C084FC', '#4ADE80', '#F87171'];  // palette fintech : 10 teintes vives bien separees, la plus grosse part prend la 1re
-
-// Abreviation des noms longs pour les graphiques ("Assurance vie" -> "AV")
-function abrevier(nom) {
-  var n = String(nom || '').trim().toUpperCase();
-  if (n === 'ASSURANCE VIE') return 'AV';
-  return nom;
-}
-
-// Habille un onglet auxiliaire (Configuration, Evolution, Mode d'emploi) :
-// fond bleu nuit sur toute la zone, en-tete thematise, quadrillage masque,
-// onglet colore. Les graphiques lisent les valeurs, pas les couleurs.
-function habiller(sh, nbCols) {
-  var last = sh.getMaxRows();
-  var cols = nbCols || 12;
-  sh.setHiddenGridlines(true);
-  sh.setTabColor(THEME.accent);
-  sh.getRange(1, 1, last, cols).setBackground(THEME.bg);
-  sh.getRange(2, 1, last - 1, cols).setFontColor(THEME.text);
-  sh.getRange(1, 1, 1, cols).setFontWeight('bold').setFontColor(THEME.text).setBackground(THEME.header);
-}
-
-// Listes deroulantes sur Configuration (suggestions, saisie libre possible)
-function appliquerValidations(cfgSh) {
-  var regleSource = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['YAHOO', 'ABC', 'FIN'], true).build();
-  var regleSupport = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['PEA', 'Assurance vie', 'CTO', 'Livret A', 'PER', 'Autre'], true).build();
-  cfgSh.getRange('D2:D300').setDataValidation(regleSource);
-  cfgSh.getRange('A2:A300').setDataValidation(regleSupport);
-}
-
-// ---------------- MENU (apparait apres rechargement de la feuille) --------
-function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('📊 Suivi du portefeuille')
-    .addItem('1. Initialiser', 'initialiser')
-    .addItem('2. Reconstruire le tableau', 'reconstruire')
-    .addItem('3. Mettre à jour les cours', 'updateCours')
-    .addItem('Compléter secteurs et zones', 'completerEtiquettes')
-    .addItem('Ajouter un point à la courbe', 'ajouterPoint')
-    .addItem('4. Installer la mise à jour quotidienne', 'installerDeclencheur')
-    .addSeparator()
-    .addItem('Chercher un ticker Yahoo', 'chercherTicker')
-    .addItem('Diagnostic graphiques', 'diagnosticGraphiques')
-    .addItem("Ouvrir le mode d'emploi", 'afficherModeDEmploi')
-    .addToUi();
-}
-
-function getSS() {
-  return SpreadsheetApp.getActiveSpreadsheet();
-}
-
-function dateFR() {
-  return Utilities.formatDate(new Date(), TZ, 'dd/MM/yyyy');
-}
-
-// ---------------- 1. INITIALISATION (a executer une seule fois) -----------
-function initialiser() {
-  var ss = getSS();
-
-  // Feuille principale
-  var sh = ss.getSheetByName(SHEET_MAIN);
-  if (!sh) {
-    var sheets = ss.getSheets();
-    if (sheets.length === 1 &&
-        sheets[0].getSheetName() !== SHEET_CFG &&
-        sheets[0].getSheetName() !== SHEET_EV &&
-        sheets[0].getSheetName() !== SHEET_HELP) {
-      sheets[0].setName(SHEET_MAIN);
-    } else {
-      sh = ss.insertSheet(SHEET_MAIN, 0);
-    }
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="description" content="Suivi de portefeuille sans connexion bancaire. Vos données restent sur votre téléphone.">
+<meta name="theme-color" content="#0F172A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Octant">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%230F172A'/%3E%3Ctext x='90' y='122' font-size='96' font-family='Arial' font-weight='bold' text-anchor='middle' fill='%237DD3FC'%3EO%3C/text%3E%3Ccircle cx='90' cy='90' r='10' fill='%2334D399'/%3E%3C/svg%3E">
+<link rel="manifest" href='data:application/manifest+json,{"name":"Octant · Suivi de portefeuille","short_name":"Octant","start_url":".","display":"standalone","background_color":"%230F172A","theme_color":"%230F172A","icons":[{"src":"data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 512 512%27%3E%3Crect width=%27512%27 height=%27512%27 rx=%27110%27 fill=%27%230F172A%27/%3E%3Ctext x=%27256%27 y=%27340%27 font-size=%27260%27 font-family=%27Arial%27 font-weight=%27bold%27 text-anchor=%27middle%27 fill=%27%237DD3FC%27%3EO%3C/text%3E%3Ccircle cx=%27256%27 cy=%27256%27 r=%2730%27 fill=%27%2334D399%27/%3E%3C/svg%3E","sizes":"512x512","type":"image/svg+xml"}]}'>
+<title>Octant · Suivi de portefeuille</title>
+<style>
+  :root {
+    --bg: #0F172A; --card: #16213A; --card2: #1E293B; --line: #7DD3FC;
+    --text: #F1F5F9; --muted: #94A3B8; --accent: #38BDF8; --green: #34D399;
+    --pos: #4ADE80; --neg: #FB7185; --danger: #F87171;
   }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+    background: var(--bg); color: var(--text); padding-bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+  /* ---------- En-tete ---------- */
+  header { padding: calc(18px + env(safe-area-inset-top)) 18px 10px; }
+  .titre {
+    font-size: clamp(19px, 6vw, 24px); font-weight: 800; letter-spacing: .2px;
+    background: linear-gradient(90deg, #7DD3FC 0%, #34D399 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+  }
+  .signature { margin-top: 3px; font-size: 11px; font-style: italic; color: var(--green); opacity: .85; }
+  .maj { margin-top: 4px; font-size: 10px; color: var(--muted); }
+  .majrow { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; gap: 8px; }
+  /* Bouton d'actualisation : pilule visible en degrade bleu-vert,
+     icone qui tourne pendant la mise a jour (class .tourne) */
+  .btnmaj {
+    display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto;
+    background: linear-gradient(135deg, #38BDF8, #34D399);
+    color: #062033; font-weight: 800; font-size: 12px;
+    padding: 9px 16px; border-radius: 999px; border: none; cursor: pointer; font-family: inherit;
+    box-shadow: 0 3px 12px rgba(56,189,248,.4);
+  }
+  .btnmaj:active { transform: scale(.96); }
+  .btnmaj:disabled { opacity: .8; }
+  .btnmaj .icmaj { display: inline-block; font-size: 14px; line-height: 1; }
+  .btnmaj.tourne .icmaj { animation: tourne .9s linear infinite; }
+  @keyframes tourne { to { transform: rotate(360deg); } }
+  /* ---------- Cartes KPI ---------- */
+  .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 6px 18px 4px; }
+  .kpi { background: var(--card2); border-radius: 14px; padding: 10px 12px 9px; }
+  .kpi .lbl { font-size: 9px; font-weight: 700; letter-spacing: .8px; color: var(--muted); text-transform: uppercase; }
+  .kpi .val { font-size: 19px; font-weight: 800; margin-top: 2px; white-space: nowrap; }
+  .pos { color: var(--pos) !important; } .neg { color: var(--neg) !important; }  /* vert / rouge : priorite sur le gris des lignes */
+  /* ---------- Sections ---------- */
+  main { padding: 12px 0 24px; }
+  h2 { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; padding: 14px 18px 8px; }
+  .groupe { margin: 0 14px 12px; background: var(--card); border-radius: 16px; overflow: hidden; }
+  .groupe .ghead {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 10px 14px 8px; font-weight: 700; font-size: 13px; color: var(--line);
+  }
+  .groupe .gsub { font-size: 11px; color: var(--muted); font-weight: 500; }
+  .ligne { padding: 9px 14px; border-top: 1px solid rgba(148,163,184,.12); cursor: pointer; }
+  .ligne:active { background: rgba(56,189,248,.08); }
+  .ligne .l1 { display: flex; justify-content: space-between; align-items: baseline; }
+  .ligne .nom { font-size: 14px; font-weight: 600; }
+  .ligne .meta { font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .ligne .montant { font-size: 14px; font-weight: 700; }
+  .ligne .l2 { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
+  .ligne .pct { font-size: 10px; color: var(--muted); white-space: nowrap; }
+  .barre { height: 4px; border-radius: 2px; background: rgba(148,163,184,.18); flex: 1; margin: 0 10px; overflow: hidden; }
+  .barre > div { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--line)); }
+  .stotal {
+    display: flex; justify-content: space-between; padding: 9px 14px;
+    border-top: 1px solid rgba(148,163,184,.18); font-size: 12px; font-weight: 700;
+    background: rgba(30,41,59,.55);
+  }
+  .total {
+    margin: 0 14px; display: flex; justify-content: space-between; align-items: baseline;
+    padding: 12px 16px; border-radius: 14px; background: var(--card2);
+    border-top: 2px solid var(--line); border-bottom: 2px solid var(--line); font-weight: 800;
+  }
+  .total .tval { font-size: 18px; }
+  /* ---------- Boutons ---------- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border: none; border-radius: 12px; padding: 11px 16px; font-size: 13px; font-weight: 700;
+    background: var(--accent); color: #062033; cursor: pointer; font-family: inherit;
+  }
+  .btn:active { opacity: .85; }
+  .btn.ghost { background: var(--card2); color: var(--text); }
+  .btn.danger { background: rgba(248,113,113,.15); color: var(--danger); }
+  .btn.wide { width: 100%; }
+  .actions { display: flex; flex-direction: column; gap: 10px; padding: 4px 18px; }
+  .fab {
+    position: fixed; right: 18px; bottom: calc(86px + env(safe-area-inset-bottom));
+    width: 54px; height: 54px; border-radius: 18px; border: none; cursor: pointer;
+    background: linear-gradient(135deg, #7DD3FC, #34D399); color: #062033;
+    font-size: 30px; font-weight: 300; line-height: 1; box-shadow: 0 6px 18px rgba(56,189,248,.35);
+  }
+  /* ---------- Nav du bas ---------- */
+  nav {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    display: flex; padding-bottom: env(safe-area-inset-bottom);
+    background: rgba(15,23,42,.92); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-top: 1px solid rgba(148,163,184,.15);
+  }
+  nav button {
+    flex: 1; padding: 10px 0 8px; background: none; border: none; cursor: pointer;
+    color: var(--muted); font-family: inherit; font-size: 10px; font-weight: 600;
+  }
+  nav button .ic { display: block; font-size: 20px; margin-bottom: 2px; }
+  nav button.actif { color: var(--accent); }
+  /* ---------- Graphiques ---------- */
+  .chartcard { background: var(--card); border-radius: 16px; margin: 0 14px 14px; padding: 14px; }
+  .chartcard h3 { font-size: 13px; color: var(--green); margin-bottom: 10px; }
+  .donutflex { display: flex; align-items: center; gap: 14px; }
+  .legende { flex: 1; font-size: 11px; line-height: 1.9; }
+  .legende .dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; }
+  .legende .p { float: right; color: var(--muted); }
+  .centre { font-size: 11px; fill: var(--muted); }
+  .centre .v { font-size: 15px; font-weight: 800; fill: var(--text); }
+  .vide { text-align: center; color: var(--muted); font-size: 12px; padding: 18px; line-height: 1.7; }
+  .vide b { color: var(--text); }
+  /* ---------- Modal ---------- */
+  .voile {
+    position: fixed; inset: 0; z-index: 60; background: rgba(4,10,22,.66);
+    display: none; align-items: flex-end; justify-content: center;
+  }
+  .voile.ouvert { display: flex; }
+  .feuille {
+    width: 100%; max-width: 480px; max-height: 88vh; overflow-y: auto;
+    background: var(--card); border-radius: 22px 22px 0 0; padding: 18px 18px calc(18px + env(safe-area-inset-bottom));
+  }
+  .feuille h3 { color: var(--green); font-size: 15px; margin-bottom: 12px; }
+  label { display: block; font-size: 10px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); margin: 10px 0 4px; }
+  input, select {
+    width: 100%; padding: 11px 12px; border-radius: 11px; border: 1px solid rgba(148,163,184,.25);
+    background: var(--bg); color: var(--text); font-size: 14px; font-family: inherit;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .deux { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .factions { display: flex; gap: 10px; margin-top: 16px; }
+  .factions .btn { flex: 1; }
+  /* ---------- Reglages ---------- */
+  .reglage { background: var(--card); border-radius: 16px; margin: 0 14px 14px; padding: 14px; }
+  .reglage p { font-size: 11px; color: var(--muted); line-height: 1.6; margin-bottom: 8px; }
+  .reglage code { background: rgba(56,189,248,.12); color: var(--line); padding: 1px 5px; border-radius: 5px; font-size: 10px; }
+  /* ---------- Toast ---------- */
+  #toast {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(96px + env(safe-area-inset-bottom));
+    background: var(--card2); color: var(--text); border: 1px solid rgba(125,211,252,.3);
+    padding: 10px 16px; border-radius: 12px; font-size: 12px; z-index: 80; max-width: 88%;
+    text-align: center; transition: opacity .3s; opacity: 0; pointer-events: none;
+  }
+  #toast.vu { opacity: 1; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="titre">Octant · Suivi de portefeuille</div>
+    <div class="signature">Tes placements en un coup d’œil, cours actualisés chaque jour, sans connexion bancaire.</div>
+    <div class="majrow"><span class="maj" id="maj"></span><button class="btnmaj" id="btnmaj" onclick="majCours()" title="Actualiser les cours"><span class="icmaj">🔄</span> <span id="btnmajlbl">Actualiser les cours</span></button></div>
+  </header>
+  <main id="vue"></main>
+  <button class="fab" id="fab" title="Ajouter un actif">+</button>
+  <nav>
+    <button data-tab="pf" class="actif"><span class="ic">📋</span>Portefeuille</button>
+    <button data-tab="an"><span class="ic">📊</span>Analyse</button>
+    <button data-tab="rg"><span class="ic">⚙️</span>Réglages</button>
+  </nav>
+  <div class="voile" id="voile"><div class="feuille" id="feuille"></div></div>
+  <div id="toast"></div>
 
-  // Feuille de configuration (la seule que l'utilisateur remplit)
-  var cfg = ss.getSheetByName(SHEET_CFG);
-  if (!cfg) {
-    cfg = ss.insertSheet(SHEET_CFG);
-    cfg.getRange(1, 1, 1, 9).setValues([[
-      'Support', 'Actif', 'Code de cotation', 'Source', 'Quantité', 'PRU', 'Cours initial (facultatif)', 'Secteur (facultatif)', 'Zone géographique (facultatif)'
-    ]]).setFontWeight('bold').setBackground(THEME.header).setFontColor(THEME.text);
-    cfg.setColumnWidth(8, 200);
-    cfg.setColumnWidth(9, 200);
-    cfg.getRange(2, 1, 1, 7).setValues([[
-      'PEA', 'EXEMPLE Air Liquide (supprime cette ligne)', 'AIR.PA', 'YAHOO', 2, 171, 0
-    ]]).setFontColor('#9ca3af').setFontStyle('italic');
-    cfg.setColumnWidth(2, 330);
-    cfg.setColumnWidth(3, 130);
-    cfg.setFrozenRows(1);
-  } else {
-    // Migration des fichiers existants : ajoute les colonnes Secteur / Zone
-    if (!cfg.getRange(1, 8).getValue()) {
-      cfg.getRange(1, 8, 1, 2).setValues([['Secteur (facultatif)', 'Zone géographique (facultatif)']])
-        .setFontWeight('bold').setBackground(THEME.header).setFontColor(THEME.text);
-      cfg.setColumnWidth(8, 200);
-      cfg.setColumnWidth(9, 200);
-    }
-  }
-  habiller(cfg);
-  appliquerValidations(cfg);
+<script>
+'use strict';
+/* =====================================================================
+   Octant · Suivi de portefeuille — PWA autonome, sans connexion bancaire.
+   Toutes les donnees restent dans le stockage local de ce telephone
+   (localStorage). Export / import JSON : tes donnees t'appartiennent.
 
-  // Feuille evolution
-  var ev = ss.getSheetByName(SHEET_EV);
-  if (!ev) {
-    ev = ss.insertSheet(SHEET_EV);
-    ev.getRange('A1').setValue('Date');
-    ev.getRange('B1').setValue('Investi');
-    ev.getRange('C1').setValue('Valeur');
-    ev.getRange('A1:C1').setFontWeight('bold').setBackground(THEME.header).setFontColor(THEME.text);
-    ev.setFrozenRows(1);
-  }
-  habiller(ev);
+   HEBERGEMENT (Netlify connecte a GitHub — cours automatiques sans clé API) :
+   1. Deposer les fichiers dans le dépôt GitHub 'octant' :
+         index.html                    <- ce fichier (a la racine)
+         package.json                  <- { 'engines': { 'node': '>=18' } }
+         netlify/functions/cours.js    <- fichier fourni a part (v3 : identite + ISIN)
+         sw.js                         <- code ci-dessous (optionnel : hors ligne Android)
+   2. Sur Netlify : Add new project > importer depuis GitHub, tout par defaut.
+      Mise a jour ulterieure : modifier les fichiers sur GitHub ; Netlify
+      redéploie tout seul en quelques secondes.
+   3. Installer : 'Ajouter a l'ecran d'accueil' (iPhone : tel quel ; Android :
+      avec sw.js).
+   La fonction cours.js interroge Yahoo Finance (comme la version Sheets),
+   couvre Euronext (CW8, AIR.PA, IWDA.AS...), convertit en euros et sert
+   les cours a l'app. Aucune clé API, rien a configurer pour l'acheteur.
 
-  // Mode d'emploi
-  if (!ss.getSheetByName(SHEET_HELP)) {
-    var help = ss.insertSheet(SHEET_HELP);
-    var lignes = [
-      ["MODE D'EMPLOI — Suivi de portefeuille"],
-      [''],
-      ['1. Onglet "Configuration" : une ligne par actif, dans n\'importe quel ordre.'],
-      ['   Colonne A - Support : PEA, Assurance vie, CTO, Livret A... (texte libre ;'],
-      ['   les lignes de meme support sont regroupees avec un sous-total automatique)'],
-      ['   Colonne B - Actif : nom affiché dans le tableau'],
-      ['   Colonne C - Code de cotation (voir colonne D pour la source) :'],
-      ['     * YAHOO : le ticker Yahoo Finance, ex : AIR.PA, MC.PA, AAPL, SUSW.L'],
-      ['       ou un ISIN (ex : FR0000121014) : code unique, aucune confusion possible'],
-      ['     * ABC : le code Euronext sur ABC Bourse, ex : AI, DG, DCAM, PAEEM'],
-      ['     * FIN : l\'adresse complète de la page finanzen.net de l\'ETF'],
-      ['     * source vide : rien à mettre (espèces, fonds en euros, livret A)'],
-      ['   Colonne D - Source : YAHOO (par defaut), ABC, FIN, ou vide'],
-      ['   Colonne E - Quantité : nombre de parts (fractions acceptées, ex 32,8908)'],
-      ['   Colonne F - PRU : prix de revient unitaire moyen, frais inclus'],
-      ['   Colonne G - Cours initial : facultatif (sinon rempli au 1er « Mettre à jour »)'],
-      ['   Colonne H - Secteur : facultatif ; un libellé (« Energie ») ou une répartition'],
-      ['     pondérée (« Tech 60; Santé 40 ») ; alimente le camembert des secteurs'],
-      ['   Colonne I - Zone géographique : facultatif, même syntaxe (France, "USA 70;...")'],
-      [''],
-      ['2. Menu "Suivi du portefeuille" > "2. Reconstruire le tableau" :'],
-      ['   construit le tableau, les sous-totaux, le total, le camembert et la courbe.'],
-      [''],
-      ['3. Après un achat : ajuste Quantité et PRU dans Configuration'],
-      ['   (PRU moyen = (ancienne qté x ancien PRU + qté achetée x prix paye) / qté totale)'],
-      ['   puis menu > "2. Reconstruire le tableau".'],
-      [''],
-      ['4. Après une vente ou un retrait : ajuste ou supprime la ligne, puis reconstruis.'],
-      [''],
-      ['5. Astuce : menu > "Chercher un ticker Yahoo" trouve le code de n\'importe'],
-      ['   quel actif ou ETF à partir de son nom ou de son code ISIN.'],
-      [''],
-      ['6. Camemberts Secteurs / Zones : colonnes H et I, ou menu'],
-      ['   "Compléter secteurs et zones" (reconnaissance automatique des ETF'],
-      ['   courants, des actions et du cash), puis "2. Reconstruire le tableau".'],
-      ['   Ces analyses montrent où est investi le capital : le cash en est exclu.'],
-      ['7. La courbe enregistre un point chaque lundi (ou via le menu).'],
-      [''],
-      ['IMPORTANT : les cours proviennent de Yahoo Finance / ABC Bourse / finanzen.net.'],
-      ['Ce sont des données indicatives, parfois retardées. Cet outil est un suivi'],
-      ['personnel et ne constitue pas un conseil en investissement.']
-    ];
-    help.getRange(1, 1, lignes.length, 1).setValues(lignes);
-    help.getRange('A1').setFontWeight('bold').setFontSize(12);
-    help.setColumnWidth(1, 720);
-  }
-  habiller(ss.getSheetByName(SHEET_HELP), 2);
+      // netlify/functions/cours.js : FICHIER FOURNI A PART (version 3).
+      // v3 - sécurite des cours : 
+      //   - verification d'identite : le nom du titre renvoye par Yahoo doit
+      //     correspondre au nom de l'actif saisi (evite les faux cours AL, WLB, BI) ;
+      //   - support des ISIN (ex FR0000121014) : code unique, aucune confusion ;
+      //   - exceptions mnémoniques : AL->AI.PA, FP->TTE.PA, WLB->WLN.PA, BI->BIM.PA ;
+      //   - réponse JSON avec champ 'detail' par actif : ticker, nom, confiance
+      //     (verifie / pa / douteux) -> l'app affiche un bandeau si douteux.
 
-  try {
-    SpreadsheetApp.getUi().alert(
-      "C'est pret !\n\n" +
-      "1. Onglet Configuration : une ligne par actif (supprime la ligne EXEMPLE).\n" +
-      "2. Menu > 2. Reconstruire le tableau.\n" +
-      "3. Menu > 3. Mettre à jour les cours.\n" +
-      "4. Menu > 4. Installer la mise à jour quotidienne."
-    );
-  } catch (e) {
-    Logger.log('Initialisation terminée.');
-  }
-}
-
-// ---------------- LECTURE DE LA CONFIGURATION ----------------------------
-function lireConfiguration() {
-  var sh = getSS().getSheetByName(SHEET_CFG);
-  if (!sh) return [];
-  var last = sh.getLastRow();
-  if (last < 2) return [];
-  var vals = sh.getRange(2, 1, last - 1, 9).getValues();
-  var out = [];
-  for (var i = 0; i < vals.length; i++) {
-    var nom = String(vals[i][1] || '').trim();
-    if (!nom) continue;
-    if (nom.toUpperCase().indexOf('EXEMPLE') !== -1) continue;
-    var source = String(vals[i][3] || 'YAHOO').trim().toUpperCase() || 'YAHOO';
-    // Protection : ignorer les codes de remplissage ("(vide)", "a verifier", "a ajuster")
-    var code = String(vals[i][2] || '').trim();
-    var cu = code.toUpperCase();
-    if (cu.indexOf('VIDE') !== -1 || cu.indexOf('VERIFIER') !== -1 || cu.indexOf('AJUSTER') !== -1) code = '';
-    out.push({
-      support: String(vals[i][0] || '').trim() || 'Autre',
-      nom: nom,
-      code: code,
-      source: source,
-      qte: Number(vals[i][4]) || 0,
-      pru: Number(vals[i][5]) || 0,
-      cours0: Number(vals[i][6]) || 0,
-      secteurs: String(vals[i][7] || '').trim(),
-      zones: String(vals[i][8] || '').trim()
-    });
-  }
-  return out;
-}
-
-// Decoupe une cellule "Secteur" ou "Zone" : "Sante" ou "Tech 60; Sante 40".
-// Retourne [{label, poids, total}] : poids bruts + total de la liste.
-// Les formules utilisees ensuite ne contiennent que des ENTIERS, pour
-// rester insensibles a la locale du tableur (virgule vs point decimal).
-function parseEtiquettes(txt) {
-  var parts = String(txt || '').split(';');
-  var out = [];
-  for (var i = 0; i < parts.length; i++) {
-    var p = parts[i].trim();
-    if (!p) continue;
-    var m = p.match(/^(.+?)[\s]+([\d.,]+)$/);
-    if (m) out.push({ label: m[1].trim(), poids: parseFloat(m[2].replace(',', '.')) || 1 });
-    else out.push({ label: p, poids: 1 });
-  }
-  var tot = 0;
-  for (var j = 0; j < out.length; j++) tot += out[j].poids;
-  for (var k = 0; k < out.length; k++) out[k].total = tot || 1;
-  return out;
-}
-
-// Titre degrade : "Octant · Portefeuille" passe du bleu clair au vert fintech,
-// lettre par lettre. Un texte en degrade continu n'existe pas dans Google
-// Sheets : on interpole la couleur de chaque lettre, ce qui se lit comme un
-// vrai degrade a taille de titre.
-function ecrireTitre(sh) {
-  var titre = NOM_PRODUIT + ' · Portefeuille';
-  var c1 = [125, 211, 252];  // #7DD3FC : bleu clair de la marque (debut du degrade)
-  var c2 = [52, 211, 153];   // #34D399 : vert fintech (fin du degrade)
-  var hex = function (n) { var s = n.toString(16); return s.length === 1 ? '0' + s : s; };
-  var b = SpreadsheetApp.newRichTextValue().setText(titre);
-  for (var i = 0; i < titre.length; i++) {
-    var t = titre.length === 1 ? 0 : i / (titre.length - 1);
-    var col = '#' + hex(Math.round(c1[0] + (c2[0] - c1[0]) * t))
-            + hex(Math.round(c1[1] + (c2[1] - c1[1]) * t))
-            + hex(Math.round(c1[2] + (c2[2] - c1[2]) * t));
-    b.setTextStyle(i, i + 1, SpreadsheetApp.newTextStyle()
-      .setBold(true).setFontSize(18).setForegroundColor(col).build());
-  }
-  sh.getRange('A1').setRichTextValue(b.build());
-}
-
-// ---------------- 2. CONSTRUCTION DU TABLEAU -----------------------------
-function reconstruire() {
-  var ss = getSS();
-  var cfg = lireConfiguration();
-  if (!cfg.length) {
-    SpreadsheetApp.getUi().alert(
-      'La feuille Configuration est vide.\n' +
-      'Ajoute une ligne par actif (Support, Actif, Code, Source, Quantité, PRU) puis réessaie.'
-    );
-    return;
-  }
-
-  // Groupes par support, dans l'ordre d'apparition
-  var groups = [];
-  var idx = {};
-  for (var i = 0; i < cfg.length; i++) {
-    if (idx[cfg[i].support] === undefined) {
-      idx[cfg[i].support] = groups.length;
-      groups.push({ support: cfg[i].support, assets: [] });
-    }
-    groups[idx[cfg[i].support]].assets.push(cfg[i]);
-  }
-  // Nombre de camemberts pour dimensionner la zone graphique (AU-DESSUS du tableau)
-  var hasSec = false, hasZone = false;
-  for (var i1 = 0; i1 < cfg.length; i1++) {
-    if (cfg[i1].secteurs) hasSec = true;
-    if (cfg[i1].zones) hasZone = true;
-  }
-  var nbPies = 1 + (hasSec ? 1 : 0) + (hasZone ? 1 : 0);
-  for (var g0 = 0; g0 < groups.length; g0++) {
-    if (groups[g0].assets.length >= 2) nbPies++;
-  }
-  // Mise en page : rangees de 3 graphiques ; la courbe prend la place
-  // libre de la derniere rangee ; sinon une rangee pleine largeur lui est dediee, calée sur la largeur du tableau.
-  var slotCourbe = nbPies % 3;
-  var courbeRow = 7 + Math.floor((nbPies - 1) / 3) * 17 + (slotCourbe === 0 ? 17 : 0);
-  var hdrRow = courbeRow + 17;
-  var rowTotal = hdrRow + 1 + cfg.length + groups.length;
-
-  var sh = ss.getSheetByName(SHEET_MAIN);
-  if (!sh) sh = ss.insertSheet(SHEET_MAIN);
-
-  // Conserver les cours actuels pour ne pas les perdre pendant la reconstruction
-  var anciens = {};
-  var oldLast = sh.getLastRow();
-  if (oldLast >= 8) {
-    var old = sh.getRange(8, 2, oldLast - 7, 4).getValues();
-    for (var o = 0; o < old.length; o++) {
-      if (old[o][0]) anciens[String(old[o][0]).trim()] = Number(old[o][3]) || 0;
-    }
-  }
-  // Trier les actifs de chaque support, du plus gros au plus petit montant
-  for (var t = 0; t < groups.length; t++) {
-    groups[t].assets.sort(function (a, b) {
-      var ma = a.qte * (anciens[a.nom] || a.cours0 || a.pru || 0);
-      var mb = b.qte * (anciens[b.nom] || b.cours0 || b.pru || 0);
-      return mb - ma;
-    });
-  }
-  sh.getCharts().forEach(function (c) { sh.removeChart(c); });
-  sh.clear();
-  // Theme fintech : fond uniforme, quadrillage masque
-  // 810 lignes : couvre aussi le miroir de la courbe (lignes 500-801),
-  // sinon cette zone restait blanche sur un ecran large
-  sh.setHiddenGridlines(true);
-  sh.getRange(1, 1, 810, 40).setBackground(THEME.bg);
-  sh.setTabColor(THEME.accent);
-
-  ecrireTitre(sh);  // marque en degrade lettre a lettre
-  sh.getRange('A2').setValue('Tes placements en un coup d’œil, cours actualisés chaque jour, sans connexion bancaire.')
-    .setFontColor(THEME.title).setFontSize(10).setFontStyle('italic');
-  sh.getRange('J2').setValue('Reconstruit le ' + dateFR() + ' — cours indicatifs')
-    .setFontColor(THEME.muted).setFontSize(9).setFontStyle('italic').setHorizontalAlignment('right')
-  // Filet sous la zone de titre : signature visuelle
-  sh.getRange('A2:B2').setBorder(null, null, true, null, null, null, THEME.line, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-  sh.getRange(hdrRow - 1, 1).setValue('DÉTAIL DES ACTIFS')
-    .setFontSize(9).setFontWeight('bold').setFontColor(THEME.muted);
-  sh.getRange(hdrRow, 1, 1, 10).setValues([[
-    'Support', 'Actif', 'Qté', 'PRU', 'Cours', 'Total investi', 'Montant', 'Plus-value latente', 'Plus-value %', '% du total'
-  ]]).setFontWeight('bold').setBackground(THEME.header).setFontColor(THEME.text)
-    .setBorder(true, false, false, false, false, false, THEME.line, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-  // En-tetes chiffres alignes a droite, au-dessus des nombres alignes a droite
-  sh.getRange(hdrRow, 3, 1, 8).setHorizontalAlignment('right');
-
-  var row = hdrRow + 1;  // premiere ligne de donnees, sous les graphiques
-  var subs = [];
-  for (var g = 0; g < groups.length; g++) {
-    var grp = groups[g];
-    var from = row;
-    grp.from = from;
-    for (var k = 0; k < grp.assets.length; k++) {
-      ecrireLigne(sh, row, grp.assets[k], anciens, rowTotal);
-      row++;
-    }
-    // Colonne Support fusionnee verticalement pour le groupe (style dashboard)
-    var supR = sh.getRange(from, 1, grp.assets.length, 1);
-    supR.breakApart();
-    supR.merge();
-    supR.setValue(grp.support).setVerticalAlignment('middle');
-    ecrireSousTotal(sh, row, 'TOTAL ' + grp.support, from, row - 1, rowTotal);
-    subs.push({ support: grp.support, row: row });
-    row++;
-  }
-
-  // Ligne TOTAL
-  var tr = row;
-  sh.getRange(tr, 2).setValue('TOTAL PORTEFEUILLE');
-  sh.getRange(tr, 6).setFormula(subs.map(function (s) { return 'F' + s.row; }).join('+')).setNumberFormat(FMT_EUR);
-  sh.getRange(tr, 7).setFormula(subs.map(function (s) { return 'G' + s.row; }).join('+')).setNumberFormat(FMT_EUR);
-  sh.getRange(tr, 8).setFormula('G' + tr + '-F' + tr).setNumberFormat(FMT_LAT);
-  sh.getRange(tr, 9).setFormula('IFERROR(H' + tr + '/F' + tr + ')').setNumberFormat(FMT_LATPCT);
-  sh.getRange(tr, 10).setValue(1).setNumberFormat(FMT_PCT);
-  sh.getRange(tr, 1, 1, 10).setBackground(THEME.total).setFontWeight('bold').setFontColor(THEME.text);
-  // Filet au-dessus et au-dessous du TOTAL : hierarchie visuelle claire
-  sh.getRange(tr, 1, 1, 10).setBorder(true, false, true, false, false, false, THEME.line, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-  // Le montant du TOTAL reste en blanc : un bleu ici recreerait l effet bleu-blanc-rouge avec les plus-values
-
-  // Bande de KPI (ligne 4 : libelles, ligne 5 : valeurs) — style "cartes"
-  sh.setRowHeight(4, 16);
-  sh.setRowHeight(5, 30);
-  var kpiCards = [
-    { c: 1, label: 'VALEUR TOTALE', formula: 'G' + tr, format: FMT_EUR,    color: THEME.text, size: 22 },
-    { c: 3, label: 'TOTAL INVESTI', formula: 'F' + tr, format: FMT_EUR,    color: THEME.text },
-    { c: 5, label: 'PLUS-VALUE',    formula: 'H' + tr, format: FMT_LAT,    color: THEME.text },
-    { c: 7, label: 'PLUS-VALUE %', formula: 'I' + tr, format: FMT_LATPCT, color: THEME.text }
-  ];
-  for (var k = 0; k < kpiCards.length; k++) {
-    var kc = kpiCards[k];
-    var krL = sh.getRange(4, kc.c, 1, 2);
-    krL.breakApart();
-    krL.merge();
-    krL.setValue(kc.label).setFontSize(8).setFontWeight('bold')
-      .setFontColor(THEME.muted).setHorizontalAlignment('center');
-    var krV = sh.getRange(5, kc.c, 1, 2);
-    krV.breakApart();
-    krV.merge();
-    krV.setFormula(kc.formula).setNumberFormat(kc.format)
-      .setFontSize(kc.size || 18).setFontWeight('bold').setFontColor(kc.color)
-      .setHorizontalAlignment('center');
-  }
-  // Bande KPI alignee sur la largeur du tableau (jusqu'a la colonne J)
-  sh.getRange(4, 1, 2, 10).setBackground(THEME.header);
-  // Couronnes au-dessus des cartes, appliquees APRES la peinture du fond pour
-  // etre visibles a coup sur ; bleu electrique uniforme sur les quatre cartes
-  var crownColors = [THEME.accent, THEME.accent, THEME.accent, THEME.accent];
-  for (var k2 = 0; k2 < kpiCards.length; k2++) {
-    sh.getRange(4, kpiCards[k2].c, 1, 2)
-      .setBorder(true, null, null, null, null, null, crownColors[k2], SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-  }
-  // Separateurs entre cartes : filets de la couleur du fond, pour decouper la bande
-  for (var sep = 3; sep <= 7; sep += 2) {
-    sh.getRange(4, sep, 2, 1).setBorder(null, true, null, null, null, null, THEME.bg, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-  }
-  // Respiration : espace au-dessus et sous la bande de KPI
-  sh.setRowHeight(3, 12);
-  sh.setRowHeight(6, 14);
-
-  // Mise en forme conditionnelle des plus/moins-values : vert vif / rose vif
-  // (les formats [Red] et [Color42] n'acceptent pas de code hex et
-  // le rouge pur vibre sur le fond bleu nuit). S'applique aux colonnes
-  // Plus-value latente / % du tableau et aux cartes KPI correspondantes.
-  var zonePerf = sh.getRange(hdrRow, 8, tr - hdrRow + 1, 2);
-  var zoneKpi  = sh.getRange(5, 5, 1, 4);
-  sh.setConditionalFormatRules([
-    SpreadsheetApp.newConditionalFormatRule()
-      .whenNumberGreaterThan(0).setFontColor(THEME.pos)
-      .setRanges([zonePerf, zoneKpi]).build(),
-    SpreadsheetApp.newConditionalFormatRule()
-      .whenNumberLessThan(0).setFontColor(THEME.neg)
-      .setRanges([zonePerf, zoneKpi]).build()
-  ]);
-
-  // Zone du camembert (colonnes M:N) + graphiques, avec diagnostic
-  var diag = [];
-  // Zones de donnees des graphiques : ecrites en couleur de fond, invisibles
-  sh.getRange(3, 12, 61, 30).setFontColor(THEME.bg);
-  var nextRow = 7;  // les graphiques passent AU-DESSUS du tableau
-  // Pas de libelle flottant en M3 : les donnees des graphiques restent invisibles (couleur de fond)
-  for (var s = 0; s < subs.length; s++) {
-    // Nom du support en colonne L, etiquette dynamique "Nom (XX%)" en colonne M
-    sh.getRange(4 + s, 12).setValue(abrevier(subs[s].support));
-    // Formule sans aucune virgule : insensible a la locale du tableur
-    sh.getRange(4 + s, 13).setFormula(
-      'L' + (4 + s) + '&CHAR(32)&CHAR(40)&IFERROR(ROUND(N' + (4 + s) + '/G' + tr + '*100))&CHAR(37)&CHAR(41)'
-    );
-    sh.getRange(4 + s, 14).setFormula('G' + subs[s].row).setNumberFormat(FMT_EUR);
-  }
-  try {
-    var pie = sh.newChart().setChartType(Charts.ChartType.PIE)
-      .addRange(sh.getRange(4, 13, subs.length, 1))
-      .addRange(sh.getRange(4, 14, subs.length, 1))
-      .setOption('title', 'Répartition du portefeuille')
-      .setOption('pieHole', 0.5)
-      .setOption('pieSliceBorderColor', THEME.bg)   // liseré de fond entre les parts : effet segments premium
-      .setOption('pieSliceBorderWidth', 2)
-      .setOption('pieSliceText', 'none')
-      .setOption('titleTextStyle', { color: THEME.title, fontSize: 14, bold: true })
-      .setOption('backgroundColor', THEME.bg)
-      .setOption('colors', CHART_COLORS)
-      .setOption('legend', { position: 'right', textStyle: { color: THEME.text } })
-      .setOption('width', 420).setOption('height', 340)
-      .setPosition(nextRow, 1, 0, 0)
-      .build();
-    sh.insertChart(pie);
-    diag.push('Camembert principal : OK (ligne ' + nextRow + ')');
-  } catch (e1) {
-    diag.push('Camembert principal : ECHEC — ' + e1.message);
-  }
-  var pieIndex = 1;  // le camembert principal occupe la position 0
-
-  // Camemberts detailles par support (chaque support avec au moins 2 actifs)
-  var colData = 20;   // colonnes T, U, V... : donnees de ces camemberts
-  var anchors = [1, 3, 7];   // colonnes d'ancrage des 3 graphiques par rangee
-  var anchorOff = [0, 20, 40];  // decalages en px : 3 camemberts de 420 px remplissent exactement les colonnes A a J (1300 px)
-  for (var g2 = 0; g2 < groups.length; g2++) {
-    var grp2 = groups[g2];
-    if (grp2.assets.length < 2) continue;
-    if (pieIndex % 3 === 0) nextRow += 17;  // rangee suivante si plus de 3 camemberts
-    var subRowG = subs[g2].row;
-    sh.getRange(3, colData).setValue(grp2.support).setFontWeight('bold');
-    for (var m = 0; m < grp2.assets.length; m++) {
-      var assetG = grp2.assets[m];
-      var assetRowG = grp2.from + m;
-      // Ticker affiche sur chaque part : code sans suffixe de place (DCAM.PA -> DCAM),
-      // ou nom complet pour les actifs sans code (especes, fonds en euros, livret A)
-      var tick = assetG.code ? assetG.code.split('.')[0].toUpperCase() : assetG.nom;
-      sh.getRange(4 + m, colData).setValue(tick);
-      // Etiquette dynamique "TICKER (XX%)" - formule sans aucune virgule (insensible a la locale)
-      sh.getRange(4 + m, colData + 1).setFormula(
-        sh.getRange(4 + m, colData).getA1Notation() + '&CHAR(32)&CHAR(40)&IFERROR(ROUND(G' + assetRowG + '/G' + subRowG + '*100))&CHAR(37)&CHAR(41)'
-      );
-      sh.getRange(4 + m, colData + 2).setFormula('G' + assetRowG).setNumberFormat(FMT_EUR);
-    }
-    SpreadsheetApp.flush();  // laisser le temps aux formules d'etre calculees avant le graphique
-    try {
-      var pieG = sh.newChart().setChartType(Charts.ChartType.PIE)
-        .addRange(sh.getRange(4, colData + 1, grp2.assets.length, 1))
-        .addRange(sh.getRange(4, colData + 2, grp2.assets.length, 1))
-        .setOption('title', 'Répartition ' + abrevier(grp2.support))
-        .setOption('pieHole', 0.5)
-        .setOption('pieSliceBorderColor', THEME.bg)   // liseré de fond entre les parts : effet segments premium
-        .setOption('pieSliceBorderWidth', 2)
-        .setOption('pieSliceText', 'none')
-        .setOption('titleTextStyle', { color: THEME.title, fontSize: 14, bold: true })
-        .setOption('backgroundColor', THEME.bg)
-        .setOption('colors', CHART_COLORS)
-        .setOption('legend', { position: 'right', textStyle: { color: THEME.text } })
-        .setOption('width', 420).setOption('height', 340)
-        .setPosition(nextRow, anchors[pieIndex % 3], anchorOff[pieIndex % 3], 0)
-        .build();
-      sh.insertChart(pieG);
-      diag.push('Camembert ' + grp2.support + ' : OK (ligne ' + nextRow + ')');
-    } catch (e3) {
-      diag.push('Camembert ' + grp2.support + ' : ECHEC — ' + e3.message);
-    }
-    colData += 3;
-    pieIndex++;
-  }
-
-  // Camemberts Secteurs et Zones geographiques (colonnes H et I de la
-  // Configuration). Une cellule contient un libelle unique ("Sante") ou une
-  // repartition ponderee ("Tech 60; Sante 40") : le montant de l'actif est
-  // ventile sur chaque libelle au prorata des poids, via des formules
-  // dynamiques (sans virgule, insensibles a la locale).
-  // Ces camemberts repondent a "ou est investi mon capital" : le cash
-  // (secteur "Cash") en est exclu, et les pourcentages sont calcules sur
-  // la somme des actifs analyses (le camembert somme a 100%).
-  var makeEtiquettes = function (champ, colX, titre) {
-    var agg = {};
-    var ordre = [];
-    for (var gi = 0; gi < groups.length; gi++) {
-      var grpZ = groups[gi];
-      for (var mi = 0; mi < grpZ.assets.length; mi++) {
-        var aZ = grpZ.assets[mi];
-        var secsA = parseEtiquettes(aZ.secteurs);
-        var isCash = false;
-        for (var ci = 0; ci < secsA.length; ci++) {
-          if (secsA[ci].label.toUpperCase() === 'CASH') { isCash = true; break; }
+      // sw.js (optionnel : hors ligne + installation Android complete)
+      const C = 'octant-v1';
+      self.addEventListener('install', e => self.skipWaiting());
+      self.addEventListener('fetch', e => {
+        if (e.request.url.indexOf('/.netlify/functions/') !== -1) {   // cours : réseau d'abord
+          e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+          return;
         }
-        if (isCash) continue;  // le cash n'est pas une exposition sectorielle ni geographique
-        var items = parseEtiquettes(champ === 'secteurs' ? aZ.secteurs : aZ.zones);
-        for (var ii = 0; ii < items.length; ii++) {
-          var lb = items[ii].label;
-          if (!agg[lb]) { agg[lb] = { f: [], w: 0 }; ordre.push(lb); }
-          // Formule en entiers uniquement (x1000) : insensible a la locale
-          agg[lb].f.push('G' + (grpZ.from + mi) + '*' + Math.round(items[ii].poids * 1000) + '/' + Math.round(items[ii].total * 1000));
-          agg[lb].w += items[ii].poids / items[ii].total * aZ.qte * (anciens[aZ.nom] || aZ.cours0 || aZ.pru || 0);
-        }
-      }
-    }
-    if (!ordre.length) { diag.push(titre + ' : aucune donnée (ou uniquement du cash)'); return; }
-    ordre.sort(function (x, y) { return agg[y].w - agg[x].w; });
-    var nC = ordre.length;
-    var rngDeb = sh.getRange(4, colX + 2).getA1Notation();
-    var rngFin = sh.getRange(3 + nC, colX + 2).getA1Notation();
-    sh.getRange(3, colX).setValue(titre).setFontWeight('bold');
-    for (var li = 0; li < ordre.length; li++) {
-      var lab = ordre[li];
-      sh.getRange(4 + li, colX).setValue(lab);
-      sh.getRange(4 + li, colX + 2).setFormula(agg[lab].f.join('+')).setNumberFormat(FMT_EUR);
-      // Pourcentage sur la somme des actifs analyses (hors cash) : total 100%
-      sh.getRange(4 + li, colX + 1).setFormula(
-        sh.getRange(4 + li, colX).getA1Notation() +
-        '&CHAR(32)&CHAR(40)&IFERROR(ROUND(' + sh.getRange(4 + li, colX + 2).getA1Notation() +
-        '/SUM(' + rngDeb + ':' + rngFin + ')*100))&CHAR(37)&CHAR(41)'
-      );
-    }
-    var nRows = nC;
-    SpreadsheetApp.flush();  // laisser le temps aux formules d'etre calculees avant le graphique
-    if (pieIndex % 3 === 0) nextRow += 17;
-    try {
-      var pieZ = sh.newChart().setChartType(Charts.ChartType.PIE)
-        .addRange(sh.getRange(4, colX + 1, nRows, 1))
-        .addRange(sh.getRange(4, colX + 2, nRows, 1))
-        .setOption('title', titre)
-        .setOption('pieHole', 0.5)
-        .setOption('pieSliceBorderColor', THEME.bg)   // liseré de fond entre les parts : effet segments premium
-        .setOption('pieSliceBorderWidth', 2)
-        .setOption('pieSliceText', 'none')
-        .setOption('titleTextStyle', { color: THEME.title, fontSize: 14, bold: true })
-        .setOption('backgroundColor', THEME.bg)
-        .setOption('colors', CHART_COLORS)
-        .setOption('legend', { position: 'right', textStyle: { color: THEME.text } })
-        .setOption('width', 420).setOption('height', 340)
-        .setPosition(nextRow, anchors[pieIndex % 3], anchorOff[pieIndex % 3], 0)
-        .build();
-      sh.insertChart(pieZ);
-      diag.push(titre + ' : OK (ligne ' + nextRow + ')');
-    } catch (e5) {
-      diag.push(titre + ' : ECHEC — ' + e5.message);
-    }
-    pieIndex++;
-  };
-  if (hasSec) makeEtiquettes('secteurs', colData, 'Secteurs');
-  if (hasZone) makeEtiquettes('zones', colData + 3, 'Zones géographiques');
-  colData += 6;
+        e.respondWith(
+          caches.open(C).then(c => c.match(e.request).then(r => {
+            const f = fetch(e.request).then(res => {
+              if (res.ok) c.put(e.request, res.clone());
+              return res;
+            }).catch(() => r);
+            return r || f;
+          }))
+        );
+      });
+      self.addEventListener('activate', e => e.waitUntil(
+        caches.keys().then(ks => Promise.all(ks.filter(k => k !== C).map(k => caches.delete(k))))
+      ));
 
-  // Feuille Evolution : en-tetes, premier point, graphique
-  var ev = ss.getSheetByName(SHEET_EV);
-  if (!ev) ev = ss.insertSheet(SHEET_EV);
-  if (ev.getLastRow() === 0) {
-    ev.getRange('A1').setValue('Date');
-    ev.getRange('B1').setValue('Investi');
-    ev.getRange('C1').setValue('Valeur');
-    ev.getRange('A1:C1').setFontWeight('bold').setBackground(THEME.header).setFontColor(THEME.text);
-  }
-  // Zone locale de la courbe sur CETTE feuille (lignes 500+, colonnes M a O) :
-  // un graphique Apps Script lit mal des donnees situees sur une autre feuille,
-  // donc on recopie ici les points d'evolution, en valeurs brutes.
-  sh.getRange(500, 13, 1, 3).setValues([['Date', 'Investi', 'Valeur']]).setFontWeight('bold');
-  var evLast = ev.getLastRow();
-  if (evLast >= 2) {
-    var evData = ev.getRange(2, 1, evLast - 1, 3).getValues();
-    sh.getRange(501, 13, evData.length, 3).setValues(evData);
-    sh.getRange(501, 13, evData.length, 1).setNumberFormat('dd/MM/yyyy');
-    sh.getRange(501, 14, evData.length, 2).setNumberFormat(FMT_EUR);
-  }
-  sh.getRange(500, 13, 301, 3).setFontColor(THEME.bg);  // miroir invisible sur le fond
-  if (ev.getLastRow() === 1) ajouterPoint();
-  if (ev.getCharts().length === 0) {
-    var courbeEv = ev.newChart().setChartType(Charts.ChartType.LINE)
-      .addRange(ev.getRange('A1:A1000'))
-      .addRange(ev.getRange('B1:C1000'))
-      .setOption('title', 'Évolution globale du portefeuille')
-      .setOption('titleTextStyle', { color: THEME.title, fontSize: 14, bold: true })
-      .setOption('backgroundColor', THEME.bg)
-      .setOption('colors', ['#64748B', THEME.accent])
-      .setOption('legend', { position: 'bottom', textStyle: { color: THEME.text } })
-      .setOption('hAxis', { textStyle: { color: THEME.muted }, gridlines: { color: THEME.grid } })
-      .setOption('vAxis', { textStyle: { color: THEME.muted }, gridlines: { color: THEME.grid } })
-      .setOption('curveType', 'function')
-      .setOption('pointSize', 6)   // un seul point est deja visible au premier lancement
-      .setOption('width', 920).setOption('height', 400)
-      .setPosition(3, 5, 0, 0)
-      .build();
-    ev.insertChart(courbeEv);
-    ev.setTabColor(THEME.accent);
-  }
+   Sur iPhone, l'installation fonctionne des maintenant sans sw.js.
+   ===================================================================== */
 
-  // Courbe d'evolution : dans la place libre de la derniere rangee de
-  // graphiques (ou sur sa propre rangee si les camemberts la remplissent)
-  try {
-    var courbe = sh.newChart().setChartType(Charts.ChartType.LINE)
-      .addRange(sh.getRange(500, 13, 301, 1))
-      .addRange(sh.getRange(500, 14, 301, 2))
-      .setOption('title', 'Évolution globale du portefeuille')
-      .setOption('legend', { position: 'bottom', textStyle: { color: THEME.text } })
-      .setOption('titleTextStyle', { color: THEME.title, fontSize: 14, bold: true })
-      .setOption('backgroundColor', THEME.bg)
-      .setOption('colors', ['#64748B', THEME.accent])
-      .setOption('hAxis', { textStyle: { color: THEME.muted }, gridlines: { color: THEME.grid } })
-      .setOption('vAxis', { textStyle: { color: THEME.muted }, gridlines: { color: THEME.grid } })
-      .setOption('curveType', 'function')
-      .setOption('pointSize', 6)   // un seul point est deja visible au premier lancement
-      .setOption('width', slotCourbe === 0 ? 1300 : 420).setOption('height', 340)
-      .setPosition(courbeRow, slotCourbe === 0 ? 1 : anchors[slotCourbe], anchorOff[slotCourbe], 0)
-      .build();
-    sh.insertChart(courbe);
-    diag.push('Courbe : OK (ligne ' + courbeRow + ')');
-  } catch (e2) {
-    diag.push('Courbe : ECHEC — ' + e2.message);
-  }
+var PALETTE = ['#38BDF8','#A78BFA','#F472B6','#34D399','#FBBF24','#22D3EE','#FB923C','#C084FC','#4ADE80','#F87171'];
+var CLE = 'octant';
+var etat = charger();
 
-  // Largeurs de colonnes fixees par le script : avec les decalages anchorOff,
-  // 3 camemberts de 420 px remplissent exactement les colonnes A a J :
-  // 0-420 / 440-860 / 880-1300 px — rangee alignee sur le tableau et la bande KPI
-  sh.setColumnWidth(1, 100);
-  sh.setColumnWidth(2, 320);
-  sh.setColumnWidths(3, 4, 105);
-  sh.setColumnWidths(7, 4, 100);
-  sh.setColumnWidth(8, 140);   // "Plus-value latente" + valeurs signees
-  sh.setColumnWidth(10, 120);  // % du total
-  sh.setRowHeight(hdrRow, 26);
-  for (var rr = hdrRow + 1; rr <= tr; rr++) sh.setRowHeight(rr, 25);  // respiration des lignes
-  sh.setFrozenRows(6);
-
-  try {
-    SpreadsheetApp.getUi().alert(
-      'Tableau reconstruit (' + cfg.length + ' actifs, ' + groups.length + ' supports).\n\n' +
-      diag.join('\n') + '\n\n' +
-      'Graphiques réellement présents sur la feuille : ' + sh.getCharts().length
-    );
-  } catch (e) {
-    Logger.log('Tableau reconstruit : ' + cfg.length + ' actifs. ' + diag.join(' | '));
-  }
+/* ---------- Stockage local ---------- */
+function charger() {
+  try { return JSON.parse(localStorage.getItem(CLE)) || vide(); } catch (e) { return vide(); }
+  function vide() { return { actifs: [], historique: [], cleApi: '', derniereMajIso: '' }; }
 }
+function sauver() { localStorage.setItem(CLE, JSON.stringify(etat)); }
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
-function ecrireLigne(sh, r, a, anciens, rowTotal) {
-  sh.getRange(r, 1, 1, 10).setBackground(r % 2 === 0 ? THEME.zebra : THEME.bg).setFontColor(THEME.text);
-  sh.getRange(r, 1).setValue(a.support).setFontColor(THEME.muted);
-  sh.getRange(r, 2).setValue(a.nom).setFontColor(THEME.text);
-  sh.getRange(r, 3).setValue(a.qte).setNumberFormat('0.####');
-  sh.getRange(r, 4).setValue(a.pru).setNumberFormat(FMT_EUR);
-  // Actif cote : on conserve le dernier cours connu (ou le cours initial).
-  // Actif sans code (especes, fonds en euros, livret A) : la valeur suivie est
-  // le montant saisi en PRU, donc la colonne Cours suit la saisie a chaque
-  // reconstruction au lieu de rester figee sur l'ancienne valeur.
-  var coursInit = a.code ? (anciens[a.nom] || a.cours0 || 0) : (a.pru || a.cours0 || 0);
-  sh.getRange(r, 5).setValue(coursInit).setNumberFormat(FMT_EUR);
-  sh.getRange(r, 6).setFormula('C' + r + '*D' + r).setNumberFormat(FMT_EUR);
-  sh.getRange(r, 7).setFormula('C' + r + '*E' + r).setNumberFormat(FMT_EUR);
-  sh.getRange(r, 8).setFormula('G' + r + '-F' + r).setNumberFormat(FMT_LAT);
-  sh.getRange(r, 9).setFormula('IFERROR((G' + r + '-F' + r + ')/F' + r + ')').setNumberFormat(FMT_LATPCT);
-  sh.getRange(r, 10).setFormula('G' + r + '/$G$' + rowTotal).setNumberFormat(FMT_PCT);
-}
+/* ---------- Formatage ---------- */
+function eur(v) { return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(v || 0); }
+function eur2(v) { return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(v || 0); }
+function pct(v) { return (v >= 0 ? '+' : '') + (v * 100).toFixed(2).replace('.', ',') + ' %'; }
+function dateFR(iso) { var t = iso.split('-'); return t[2] + '/' + t[1] + '/' + t[0]; }
 
-function ecrireSousTotal(sh, r, label, from, to, rowTotal) {
-  sh.getRange(r, 2).setValue(label);
-  sh.getRange(r, 6).setFormula('SUM(F' + from + ':F' + to + ')').setNumberFormat(FMT_EUR);
-  sh.getRange(r, 7).setFormula('SUM(G' + from + ':G' + to + ')').setNumberFormat(FMT_EUR);
-  sh.getRange(r, 8).setFormula('G' + r + '-F' + r).setNumberFormat(FMT_LAT);
-  sh.getRange(r, 9).setFormula('IFERROR(H' + r + '/F' + r + ')').setNumberFormat(FMT_LATPCT);
-  sh.getRange(r, 10).setFormula('G' + r + '/$G$' + rowTotal).setNumberFormat(FMT_PCT);
-  sh.getRange(r, 1, 1, 10).setBackground(THEME.subtotal).setFontWeight('bold').setFontColor(THEME.text);
-}
-
-// ---------------- 3. MISE A JOUR DES COURS -------------------------------
-function updateCours() {
-  var ss = getSS();
-  var sh = ss.getSheetByName(SHEET_MAIN);
-  if (!sh) return;
-  var cfg = lireConfiguration();
-
-  // Lier chaque actif de la configuration a sa ligne du tableau (par nom).
-  // Le scan demarre apres la zone graphique : le tableau commence vers la
-  // ligne 40, mais on scanne large (a partir de la ligne 8) par securite.
-  var rows = {};
-  var last = sh.getLastRow();
-  if (last >= 8) {
-    var names = sh.getRange(8, 2, last - 7, 1).getValues();
-    for (var i = 0; i < names.length; i++) {
-      if (names[i][0]) rows[String(names[i][0]).trim()] = 8 + i;
-    }
-  }
-
-  var rapport = [];
-  var fails = 0;
-  for (var k = 0; k < cfg.length; k++) {
-    var a = cfg[k];
-    var r = rows[a.nom];
-    if (!a.code) {
-      rapport.push('- ' + a.nom + ' : pas de code de cotation -> aucun cours à chercher (normal pour espèces / fonds en euros / livret A)');
-      continue;
-    }
-    if (!r) {
-      fails++;
-      rapport.push('X ' + a.nom + ' : ligne absente du tableau -> lance "2. Reconstruire le tableau"');
-      continue;
-    }
-    var p = fetchPrix(a);
-    if (p && p > 0) {
-      sh.getRange(r, 5).setValue(p);
-      rapport.push('OK ' + a.nom + ' : cours mis à jour -> ' + String(p.toFixed(2)).replace('.', ',') + ' EUR');
-      if (a.pru > 0 && (p / a.pru > 20 || p / a.pru < 0.05)) {
-        rapport.push('? ' + a.nom + ' : ATTENTION, cours très éloigné du PRU -> vérifie le code de cotation (un ISIN, ex FR0000121014, est le plus sûr)');
-      }
-    } else {
-      fails++;
-      rapport.push('X ' + a.nom + ' : échec de récupération (source ' + a.source + ', code "' + a.code + '")');
-    }
-  }
-
-  sh.getRange('J2').setValue('Cours actualisés le ' + dateFR() + ' — données indicatives')
-    .setFontColor(THEME.muted).setFontSize(9).setFontStyle('italic');
-
-  if (new Date().getDay() === 1) ajouterPoint();
-
-  Logger.log(rapport.join('\n'));
-  try {
-    SpreadsheetApp.getUi().alert(
-      'RÉSULTAT DE LA MISE À JOUR\n\n' + rapport.join('\n') +
-      (fails ? '\n\n' + fails + ' échec(s) — copie ce message tel quel si tu demandes de l\'aide.'
-             : '\n\nTout est à jour.')
-    );
-  } catch (e) { /* appel automatique (declencheur) : pas de fenetre */ }
-}
-
-function fetchPrix(a) {
-  try {
-    if (a.source === 'ABC') {
-      // Tolerant : "DCAM.pa" est accepte comme "DCAM"
-      var codeABC = a.code.replace(/\.PA$/i, '').toUpperCase();
-      var r1 = UrlFetchApp.fetch('https://www.abcbourse.com/cotation/' + codeABC + 'p',
-        { muteHttpExceptions: true, followRedirects: true });
-      if (r1.getResponseCode() !== 200) return null;
-      var m1 = r1.getContentText().match(/\|\s*([\d,]+)\s€\s*\|\s*[+-][\d,]+%/);
-      return m1 ? parseFloat(m1[1].replace(/[\s\u00a0]/g, '').replace(',', '.')) : null;
-    }
-    if (a.source === 'FIN') {
-      var r2 = UrlFetchApp.fetch(a.code, { muteHttpExceptions: true, followRedirects: true });
-      if (r2.getResponseCode() !== 200) return null;
-      var m2 = r2.getContentText().match(/(\d+,\d\d)\s*EUR/);
-      return m2 ? parseFloat(m2[1].replace(/[\s\u00a0]/g, '').replace(',', '.')) : null;
-    }
-    // ISIN (ex : FR0000121014) : resolution via la recherche Yahoo, code unique
-    if (/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(a.code)) {
-      var rs = UrlFetchApp.fetch(
-        'https://query1.finance.yahoo.com/v1/finance/search?q=' + encodeURIComponent(a.code) + '&quotesCount=5&newsCount=0',
-        { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
-      if (rs.getResponseCode() === 200) {
-        var qs = (JSON.parse(rs.getContentText()).quotes) || [];
-        var secours = 0;
-        for (var qi = 0; qi < qs.length; qi++) {
-          var sym = qs[qi] && qs[qi].symbol;
-          if (!sym) continue;
-          var rt = UrlFetchApp.fetch(
-            'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(sym) + '?interval=1d&range=1d',
-            { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
-          if (rt.getResponseCode() !== 200) continue;
-          var dt = JSON.parse(rt.getContentText());
-          var mt = dt && dt.chart && dt.chart.result && dt.chart.result[0] && dt.chart.result[0].meta;
-          var pt = mt && mt.regularMarketPrice;
-          if (pt && pt > 0) {
-            if (mt.currency === 'EUR') return pt;
-            if (!secours) secours = pt;
-          }
-        }
-        return secours || null;
-      }
-    }
-    // Source par defaut : YAHOO (API JSON)
-    var baseC = a.code.split('.')[0].toUpperCase();
-    var codeY = CODES_YAHOO[baseC] || (a.code.indexOf('.') === -1 ? a.code + '.PA' : a.code);
-    var r3 = UrlFetchApp.fetch(
-      'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(codeY) + '?interval=1d&range=1d',
-      { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
-    if (r3.getResponseCode() === 200) {
-      var d = JSON.parse(r3.getContentText());
-      var meta = d && d.chart && d.chart.result && d.chart.result[0] && d.chart.result[0].meta;
-      var p = meta && meta.regularMarketPrice;
-      if (p && p > 0) return p;
-    }
-    // 2e tentative Yahoo : lecture de la page quote
-    var r4 = UrlFetchApp.fetch('https://finance.yahoo.com/quote/' + encodeURIComponent(a.code),
-      { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
-    if (r4.getResponseCode() !== 200) return null;
-    var m4 = r4.getContentText().match(/"regularMarketPrice":\{"raw":([\d.]+)/);
-    return m4 ? parseFloat(m4[1]) : null;
-  } catch (e) {
-    return null;
-  }
-}
-
-// ---------------- COURBE : AJOUT D'UN POINT -------------------------------
-function trouverTotal(sh) {
-  var last = sh.getLastRow();
-  if (last < 4) return 0;
-  var vals = sh.getRange(4, 2, last - 3, 1).getValues();
-  for (var i = 0; i < vals.length; i++) {
-    if (String(vals[i][0]).trim() === 'TOTAL PORTEFEUILLE') return 4 + i;
-  }
-  return 0;
-}
-
-function ajouterPoint() {
-  var ss = getSS();
-  var sh = ss.getSheetByName(SHEET_MAIN);
-  var ev = ss.getSheetByName(SHEET_EV);
-  if (!sh || !ev) return;
-  var tr = trouverTotal(sh);
-  if (!tr) return;
-
-  var now = new Date();
-  var today = Utilities.formatDate(now, TZ, 'dd/MM/yyyy');
-  var last = ev.getLastRow();
-  if (last >= 2) {
-    var prev = ev.getRange(last, 1).getValue();
-    if (prev instanceof Date) {
-      if (Utilities.formatDate(prev, TZ, 'yyyyMMdd') === Utilities.formatDate(now, TZ, 'yyyyMMdd')) return;
-    } else if (String(prev).trim() === today) {
-      return;
-    }
-  }
-  var investi = sh.getRange('F' + tr).getValue();
-  var valeur = sh.getRange('G' + tr).getValue();
-
-  // Point dans la feuille Evolution
-  ev.getRange(last + 1, 1).setValue(now).setNumberFormat('dd/MM/yyyy');
-  ev.getRange(last + 1, 2).setValue(investi).setNumberFormat(FMT_EUR);
-  ev.getRange(last + 1, 3).setValue(valeur).setNumberFormat(FMT_EUR);
-
-  // Copie du point dans la zone locale de la feuille Portefeuille (lignes 500+)
-  var zone = sh.getRange(500, 13, 301, 1).getValues();
-  var lastM = 0;
-  for (var z = 1; z < zone.length; z++) {
-    if (zone[z][0] === '' || zone[z][0] === null) break;
-    lastM = z;
-  }
-  if (501 + lastM <= 800) {
-    sh.getRange(501 + lastM, 13).setValue(now).setNumberFormat('dd/MM/yyyy');
-    sh.getRange(501 + lastM, 14).setValue(investi).setNumberFormat(FMT_EUR);
-    sh.getRange(501 + lastM, 15).setValue(valeur).setNumberFormat(FMT_EUR);
-  }
-  Logger.log('Point ajouté à la courbe : ' + today);
-}
-
-// ---------------- 4. DECLENCHEUR QUOTIDIEN -------------------------------
-function installerDeclencheur() {
-  ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
-  ScriptApp.newTrigger('updateCours')
-    .timeBased().atHour(9).everyDays(1)
-    .inTimezone(TZ)
-    .create();
-  Logger.log('Mise à jour quotidienne installée (vers 9h, heure de Paris).');
-}
-
-// ---------------- SECTEURS ET ZONES : REMPLISSAGE AUTOMATIQUE ------------
-// Profils integres des ETF les plus courants (repartitions indicatives,
-// stables a quelques points par an). Les debutants n'ont rien a saisir.
+/* ---------- Secteurs & zones : reconnaissance automatique ---------- */
+/* Profils intégrés des ETF les plus courants (répartitions indicatives,
+   stables à quelques points par an) : les débutants n'ont rien à saisir.
+   Un champ accepte un libellé simple (« Tech ») ou pondéré (« Tech 60; Santé 40 »). */
 var PROFILES_ETF = [
   { m: ['ACWI', 'ALL COUNTRY', 'DCAM'], sec: 'Technologie 32; Financier 16; Santé 12; Industrie 10; Consommation 11; Autres 19', zone: 'USA 63; Europe 15; Asie-Pacifique 15; Autres 7' },
   { m: ['WORLD'], sec: 'Technologie 32; Financier 16; Santé 13; Industrie 11; Consommation 10; Autres 18', zone: 'USA 70; Europe 15; Asie-Pacifique 15' },
@@ -955,28 +265,16 @@ var PROFILES_ETF = [
   { m: ['GOLD', 'OR PHYSIQUE', 'XAU'], sec: 'Or 100', zone: 'Monde 100' },
   { m: ['IMMO', 'SCPI', 'REIT'], sec: 'Immobilier 100', zone: 'Monde 100' }
 ];
-var TRAD_SECTEURS = {
-  'Technology': 'Technologie', 'Financial Services': 'Financier', 'Healthcare': 'Santé',
-  'Industrials': 'Industrie', 'Consumer Cyclical': 'Consommation', 'Consumer Defensive': 'Consommation de base',
-  'Basic Materials': 'Matériaux', 'Energy': 'Énergie', 'Utilities': 'Services publics',
-  'Communication Services': 'Communication', 'Real Estate': 'Immobilier'
-};
-
-// Dictionnaire ticker -> index de profil (identification prioritaire,
-// deterministe : independante du texte libre de la colonne "Actif")
 var TICKERS_ETF = {
   'DCAM': 0, 'PAEEM': 5, 'ETZ': 4, 'EMIM': 5,
-  'CW8': 1, 'SWSH': 1, 'IWDA': 1, 'SWDA': 1,   // ETF "World"
+  'CW8': 1, 'SWSH': 1, 'IWDA': 1, 'SWDA': 1,   // ETF « World »
   'SXR8': 2,                                    // S&P 500
   'GOLD': 7                                     // ETF or
 };
-
 function profilETF(nom, code) {
-  // 1. Ticker exact (fiable) : priorite sur le nom libre de la colonne B
   var base = String(code || '').toUpperCase().split('.')[0];
   if (TICKERS_ETF[base] !== undefined) return PROFILES_ETF[TICKERS_ETF[base]];
-  // 2. Repli : mots-cles du nom, pour les ETF hors dictionnaire
-  var hay = (nom + ' ' + code).toUpperCase();
+  var hay = (String(nom || '') + ' ' + String(code || '')).toUpperCase();
   for (var i = 0; i < PROFILES_ETF.length; i++) {
     for (var j = 0; j < PROFILES_ETF[i].m.length; j++) {
       if (hay.indexOf(PROFILES_ETF[i].m[j]) !== -1) return PROFILES_ETF[i];
@@ -984,14 +282,21 @@ function profilETF(nom, code) {
   }
   return null;
 }
-
-// Exceptions : mnemoniques Euronext differents du ticker Yahoo
-var CODES_YAHOO = { 'AI': 'AI.PA', 'AL': 'AI.PA', 'FP': 'TTE.PA', 'WLB': 'WLN.PA', 'BI': 'BIM.PA' };
-
-// Zone geographique deduite du suffixe du ticker Yahoo (.PA -> France...)
+function parseEtiquettes(txt) {
+  var parts = String(txt || '').split(';'), out = [], tot = 0;
+  parts.forEach(function (p) {
+    p = p.trim(); if (!p) return;
+    var m = p.match(/^(.+?)[\s]+([\d.,]+)$/);
+    var o = m ? { label: m[1].trim(), poids: parseFloat(m[2].replace(',', '.')) || 1 }
+              : { label: p, poids: 1 };
+    out.push(o); tot += o.poids;
+  });
+  out.forEach(function (o) { o.part = tot ? o.poids / tot : 0; });
+  return out;
+}
 function zoneDepuisSuffixe(c) {
-  var s = String(c).toUpperCase();
-  if (s.indexOf('.') === -1) return 'USA';
+  var s = String(c || '').toUpperCase();
+  if (s.indexOf('.') === -1) return '';
   var suf = s.substring(s.indexOf('.'));
   if (suf === '.PA' || suf === '.NX') return 'France';
   if (suf === '.AS') return 'Pays-Bas';
@@ -1006,185 +311,443 @@ function zoneDepuisSuffixe(c) {
       suf === '.SS' || suf === '.SZ' || suf === '.KS' || suf === '.KQ') return 'Asie-Pacifique';
   return 'Monde';
 }
-
-// Secteur et zone d'une action. Double tentative : API de recherche Yahoo
-// (la meme que "Chercher un ticker"), puis page profil en secours.
-// Pour les codes ABC (mnemoniques Euronext) : traduction en ticker Yahoo
-// (.PA) — on n'essaie JAMAIS le mnemonique brut, qui designerait un autre
-// actif sur Yahoo (ex : SAN tout court = Santander).
-function fetchProfilYahoo(code, source) {
-  try {
-    var essais = [];
-    var cu = String(code).toUpperCase();
-    if (source === 'ABC') {
-      if (CODES_YAHOO[cu]) essais.push(CODES_YAHOO[cu]);
-      essais.push(cu + '.PA');
-    } else {
-      essais.push(code);
-    }
-    var secteur = '', zone = '';
-    for (var i = 0; i < essais.length && !secteur; i++) {
-      var t1 = profilViaRecherche(essais[i]);
-      if (t1) { secteur = t1.secteur; zone = t1.zone; }
-    }
-    if (!secteur) {
-      for (var k = 0; k < essais.length && !secteur; k++) {
-        var t2 = profilViaPage(essais[k]);
-        if (t2) { secteur = t2.secteur; zone = t2.zone; }
-      }
-    }
-    if (!secteur) return null;
-    return { secteur: secteur, zone: zone };
-  } catch (e) {
+/* Suggestion hors ligne pour un actif : profil ETF, puis heuristiques
+   (cash, livret, fonds en euros), puis zone déduite du suffixe du code. */
+function suggestion(nom, code) {
+  var p = profilETF(nom, code);
+  if (p) return { sec: p.sec, zone: p.zone, via: 'ETF reconnu : répartition intégrée' };
+  var nu = String(nom || '').toUpperCase();
+  if (!code) {
+    if (nu.indexOf('LIVRET') !== -1 || nu.indexOf('CASH') !== -1 ||
+        nu.indexOf('ESPÈCES') !== -1 || nu.indexOf('ESPECES') !== -1)
+      return { sec: 'Cash', zone: 'Cash', via: 'Cash : exclu des camemberts' };
+    if (nu.indexOf('FONDS') !== -1 || nu.indexOf('EURO') !== -1)
+      return { sec: 'Obligations', zone: 'France', via: 'Fonds en euros' };
     return null;
   }
+  var z = zoneDepuisSuffixe(code);
+  if (z) return { sec: '', zone: z, via: 'Zone déduite du code' };
+  return null;
 }
 
-function profilViaRecherche(ticker) {
-  try {
-    var r = UrlFetchApp.fetch(
-      'https://query1.finance.yahoo.com/v1/finance/search?q=' + encodeURIComponent(ticker) + '&quotesCount=5&newsCount=0',
-      { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
-    if (r.getResponseCode() !== 200) return null;
-    var quotes = (JSON.parse(r.getContentText()).quotes) || [];
-    for (var j = 0; j < quotes.length; j++) {
-      var q = quotes[j];
-      if (String(q.symbol || '').toUpperCase() === String(ticker).toUpperCase() && q.sector) {
-        return { secteur: TRAD_SECTEURS[q.sector] || q.sector, zone: zoneDepuisSuffixe(q.symbol) };
-      }
-    }
-    return null;
-  } catch (e) {
-    return null;
-  }
+/* ---------- Calculs ---------- */
+function montants(a) { return { inv: (a.qte || 0) * (a.pru || 0), val: (a.qte || 0) * (a.cours || 0) }; }
+function totaux() {
+  var inv = 0, val = 0;
+  etat.actifs.forEach(function (a) { var m = montants(a); inv += m.inv; val += m.val; });
+  return { inv: inv, val: val, pv: val - inv, pvp: inv ? (val - inv) / inv : 0 };
 }
-
-function profilViaPage(ticker) {
-  try {
-    var r = UrlFetchApp.fetch('https://finance.yahoo.com/quote/' + encodeURIComponent(ticker) + '/profile',
-      { muteHttpExceptions: true, followRedirects: true, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
-    if (r.getResponseCode() !== 200) return null;
-    var txt = r.getContentText();
-    var ms = txt.match(/"sector"\s*:\s*"([^"]+)"/);
-    if (!ms) return null;
-    var secteur = TRAD_SECTEURS[ms[1]] || ms[1];
-    var mc = txt.match(/"country"\s*:\s*"([^"]+)"/);
-    var pays = mc ? mc[1] : '';
-    if (pays === 'United States') pays = 'USA';
-    else if (pays === 'United Kingdom') pays = 'Royaume-Uni';
-    else if (!pays) pays = zoneDepuisSuffixe(ticker);
-    return { secteur: secteur, zone: pays };
-  } catch (e) {
-    return null;
-  }
-}
-
-function completerEtiquettes() {
-  var cfgSh = getSS().getSheetByName(SHEET_CFG);
-  if (!cfgSh) {
-    SpreadsheetApp.getUi().alert('Lance d\'abord "1. Initialiser".');
-    return;
-  }
-  var last = cfgSh.getLastRow();
-  if (last < 2) return;
-  var vals = cfgSh.getRange(2, 1, last - 1, 9).getValues();
-  var rapport = [];
-  for (var i = 0; i < vals.length; i++) {
-    var nom = String(vals[i][1] || '').trim();
-    if (!nom || nom.toUpperCase().indexOf('EXEMPLE') !== -1) continue;
-    var sec = '', zone = '';
-    var code = String(vals[i][2] || '').trim();
-    var src = String(vals[i][3] || 'YAHOO').trim().toUpperCase() || 'YAHOO';
-    var cu = code.toUpperCase();
-    if (cu.indexOf('VIDE') !== -1 || cu.indexOf('VERIFIER') !== -1 || cu.indexOf('AJUSTER') !== -1) code = '';
-    if (!code) {
-      // Actif sans cotation : reconnaissance par nom (cash, fonds euros, livret A)
-      var nu = nom.toUpperCase();
-      if (nu.indexOf('LIVRET') !== -1 || nu.indexOf('ESPECES') !== -1 || nu.indexOf('ESPECE') !== -1 ||
-          nu.indexOf('ESPÈCES') !== -1 || nu.indexOf('CASH') !== -1) {
-        sec = 'Cash';  // le cash sera exclu des camemberts Secteurs / Zones
-      } else if (nu.indexOf('FONDS') !== -1 || nu.indexOf('EURO') !== -1) {
-        sec = 'Obligations'; zone = 'France';
-      }
-    } else {
-      var p = profilETF(nom, code);
-      if (p) {
-        sec = p.sec; zone = p.zone;
-      } else {
-        var r = fetchProfilYahoo(code, src);
-        if (r) { sec = r.secteur; zone = r.zone; }
-      }
-    }
-    var r8 = 2 + i;
-    var rempli = false;
-    if (sec && !String(vals[i][7] || '').trim()) { cfgSh.getRange(r8, 8).setValue(sec); rempli = true; }
-    if (zone && !String(vals[i][8] || '').trim()) { cfgSh.getRange(r8, 9).setValue(zone); rempli = true; }
-    if (rempli) rapport.push('OK ' + nom + ' -> ' + sec + ' | ' + zone);
-    else if (!String(vals[i][7] || '').trim() || !String(vals[i][8] || '').trim()) {
-      rapport.push('? ' + nom + ' : non reconnu (code : ' + (code || 'VIDE') + ', source : ' + src + ') -> remplis les colonnes H et I à la main');
-    }
-  }
-  try {
-    SpreadsheetApp.getUi().alert(
-      'SECTEURS ET ZONES (v' + VERSION_SCRIPT + ')\n\n' +
-      (rapport.length ? rapport.join('\n') : 'Rien à compléter : tout est déjà renseigné.') +
-      '\n\nRelance ensuite "2. Reconstruire le tableau".\n' +
-      'Tu peux ajuster à la main : un libellé simple ou une répartition pondérée.'
-    );
-  } catch (e) {
-    Logger.log(rapport.join('\n'));
-  }
-}
-
-// ---------------- RECHERCHE DE TICKER -------------------------------------
-function chercherTicker() {
-  var ui = SpreadsheetApp.getUi();
-  var res = ui.prompt(
-    'Chercher un ticker',
-    'Tape un nom ou un code ISIN (ex : "Vinci", "IE00BYX2JD69") :',
-    ui.ButtonSet.OK_CANCEL
-  );
-  if (res.getSelectedButton() !== ui.Button.OK) return;
-  try {
-    var resp = UrlFetchApp.fetch(
-      'https://query1.finance.yahoo.com/v1/finance/search?q=' +
-      encodeURIComponent(res.getResponseText()) + '&quotesCount=8&newsCount=0',
-      { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
-    var data = JSON.parse(resp.getContentText());
-    var lines = (data.quotes || []).map(function (q) {
-      return q.symbol + ' — ' + (q.shortname || q.longname || '') + ' (' + (q.exchange || '') + ')';
-    });
-    ui.alert(
-      lines.length
-        ? 'Copie le ticker voulu dans la colonne C de Configuration :\n\n' + lines.join('\n')
-        : 'Aucun résultat. Essaie un autre nom.'
-    );
-  } catch (e) {
-    ui.alert('Recherche impossible : ' + e.message);
-  }
-}
-
-function afficherModeDEmploi() {
-  var help = getSS().getSheetByName(SHEET_HELP);
-  if (help) help.activate();
-  else SpreadsheetApp.getUi().alert("Lance d'abord \"1. Initialiser\".");
-}
-
-// ---------------- DIAGNOSTIC DES GRAPHIQUES -------------------------------
-function diagnosticGraphiques() {
-  var ss = getSS();
-  var out = [];
-  [SHEET_MAIN, SHEET_EV].forEach(function (nom) {
-    var sh = ss.getSheetByName(nom);
-    if (!sh) { out.push(nom + ' : feuille introuvable'); return; }
-    var cs = sh.getCharts();
-    out.push(nom + ' : ' + cs.length + ' graphique(s)');
-    for (var i = 0; i < cs.length; i++) {
-      out.push('   - ' + cs[i].getType() + ' (titre : ' + (cs[i].getOptions()['title'] || 'sans titre') + ')');
-    }
+function groupes() {
+  var g = {};
+  etat.actifs.forEach(function (a) {
+    var s = (a.support || 'Autre').trim() || 'Autre';
+    (g[s] = g[s] || []).push(a);
   });
-  SpreadsheetApp.getUi().alert(
-    'ETAT DES GRAPHIQUES\n\n' + out.join('\n') +
-    '\n\nS\'il y a 0 graphique ici alors que la reconstruction disait OK, copie ce message tel quel.'
-  );
+  return Object.keys(g).sort(function (x, y) {
+    var vx = 0, vy = 0;
+    g[x].forEach(function (a) { vx += montants(a).val; });
+    g[y].forEach(function (a) { vy += montants(a).val; });
+    return vy - vx;
+  }).map(function (s) { return { nom: s, actifs: g[s] }; });
 }
+function repartition(champ) {
+  var m = {}, ordre = [];
+  etat.actifs.forEach(function (a) {
+    var lib = ((champ === 'secteur' ? a.secteur : a.zone) || '').trim();
+    if (!lib) return;
+    if (lib.toUpperCase() === 'CASH') return;              // le cash n'est pas une exposition
+    var mnt = montants(a).val;
+    parseEtiquettes(lib).forEach(function (p) {             // « Tech 60; Santé 40 » ou « Tech »
+      m[p.label] = (m[p.label] || 0) + mnt * p.part;
+      if (ordre.indexOf(p.label) === -1) ordre.push(p.label);
+    });
+  });
+  return ordre.map(function (l) { return { label: l, val: m[l] }; }).sort(function (x, y) { return y.val - x.val; });
+}
+
+/* ---------- Composants SVG ---------- */
+function donut(items) {
+  var total = 0; items.forEach(function (i) { total += i.val; });
+  if (!total) return '<div class="vide">Aucune donnée.<br>« ' + (items.champ || 'Secteur') + ' » se remplit automatiquement :<br>profils ETF reconnus depuis le nom ou le code,<br>ou bouton 🪄 dans l\'onglet Analyse.</div>';
+  var C = 2 * Math.PI * 40, off = 0, segs = '';
+  items.forEach(function (i, k) {
+    var len = i.val / total * C;
+    segs += '<circle r="40" cx="60" cy="60" fill="none" stroke="' + PALETTE[k % PALETTE.length] +
+      '" stroke-width="18" stroke-dasharray="' + len + ' ' + (C - len) + '" stroke-dashoffset="' + (-off) +
+      '" transform="rotate(-90 60 60)"/>';
+    off += len;
+  });
+  var centre = '<text x="60" y="56" text-anchor="middle" class="centre">Total</text>' +
+    '<text x="60" y="74" text-anchor="middle" class="centre v">' + eur(total) + '</text>';
+  var leg = items.map(function (i, k) {
+    return '<div><span class="dot" style="background:' + PALETTE[k % PALETTE.length] + '"></span>' +
+      i.label + '<span class="p">' + Math.round(i.val / total * 100) + '&thinsp;%</span></div>';
+  }).join('');
+  return '<div class="donutflex"><svg width="120" height="120" viewBox="0 0 120 120">' + segs + centre +
+    '</svg><div class="legende">' + leg + '</div></div>';
+}
+function courbe() {
+  var h = etat.historique;
+  if (h.length < 1) return '<div class="vide">Aucun point encore.<br>Utilise « Enregistrer un point » juste au-dessus<br>pour démarrer la courbe de ton patrimoine.</div>';
+  var W = 320, H = 140, P = 8;
+  var vs = h.map(function (p) { return p.valeur; });
+  var min = Math.min.apply(null, vs), max = Math.max.apply(null, vs);
+  if (max === min) { max += 1; min -= 1; }
+  var X = function (i) { return h.length === 1 ? W / 2 : P + i * (W - 2 * P) / (h.length - 1); };
+  var Y = function (v) { return H - P - (v - min) / (max - min) * (H - 2 * P); };
+  var pts = h.map(function (p, i) { return X(i).toFixed(1) + ',' + Y(p.valeur).toFixed(1); }).join(' ');
+  var aires = P + ',' + (H - P) + ' ' + pts + ' ' + (h.length === 1 ? W / 2 : W - P) + ',' + (H - P);
+  var dots = h.map(function (p, i) {
+    return '<circle cx="' + X(i) + '" cy="' + Y(p.valeur) + '" r="3.5" fill="#7DD3FC"/>';
+  }).join('');
+  return '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="display:block">' +
+    '<polygon points="' + aires + '" fill="rgba(56,189,248,.13)"/>' +
+    '<polyline points="' + pts + '" fill="none" stroke="#38BDF8" stroke-width="2.5" stroke-linejoin="round"/>' +
+    dots +
+    '<text x="' + P + '" y="12" font-size="9" fill="#94A3B8">' + eur(max) + '</text>' +
+    '<text x="' + P + '" y="' + (H - 2) + '" font-size="9" fill="#94A3B8">' + eur(min) + '</text>' +
+    '</svg><div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted)">' +
+    '<span>' + dateFR(h[0].date) + '</span><span>' + dateFR(h[h.length - 1].date) + '</span></div>';
+}
+
+/* ---------- Rendus ---------- */
+var vue = document.getElementById('vue');
+function rendre(tab) {
+  var t = totaux();
+  var auj = new Date().toISOString().slice(0, 10);
+  var elMaj = document.getElementById('maj');
+  if (etat.derniereMajIso === auj) elMaj.textContent = 'Cours actualisés automatiquement aujourd\'hui ✓';
+  else if (etat.derniereMaj) elMaj.textContent = 'Cours actualisés chaque jour à l\'ouverture — dernier : ' + etat.derniereMaj;
+  else elMaj.textContent = 'Actualisation automatique quotidienne à l\'ouverture de l\'app';
+  if (tab === 'pf') rendrePortefeuille(t);
+  else if (tab === 'an') rendreAnalyse(t);
+  else rendreReglages();
+}
+function rendrePortefeuille(t) {
+  var h = '';
+  if (!etat.actifs.length) {
+    h = '<div class="vide" style="margin:30px 18px"><b>Bienvenue sur Octant 👋</b><br><br>' +
+      'Ajoute ton premier actif avec le bouton <b>+</b> :<br>action, ETF, fonds en euros, livret…<br>' +
+      'Aucune connexion bancaire, aucune inscription.<br>Tes données restent sur ton téléphone.</div>';
+  } else {
+    h = '<div class="kpis">' +
+      kpi('Valeur totale', eur(t.val), '') +
+      kpi('Total investi', eur(t.inv), '') +
+      kpi('Plus-value', eur(t.pv), t.pv >= 0 ? 'pos' : 'neg') +
+      kpi('Plus-value', pct(t.pvp), t.pv >= 0 ? 'pos' : 'neg') + '</div>';
+    groupes().forEach(function (g) {
+      var gi = 0, gv = 0;
+      g.actifs.forEach(function (a) { var m = montants(a); gi += m.inv; gv += m.val; });
+      var tri = g.actifs.slice().sort(function (a, b) { return montants(b).val - montants(a).val; });
+      var maxVal = montants(tri[0]).val || 1;
+      h += '<h2>' + g.nom + '</h2><div class="groupe"><div class="ghead"><span>' + g.nom +
+        '</span><span class="gsub">' + eur(gv) + '</span></div>';
+      tri.forEach(function (a) {
+        var m = montants(a), part = t.val ? m.val / t.val : 0;
+        h += '<div class="ligne" onclick="ouvrirActif(\'' + a.id + '\')">' +
+          '<div class="l1"><span><span class="nom">' + a.nom + '</span><br>' +
+          '<span class="meta">' + (a.code || 'sans code') + ' · ' + a.qte + ' × ' + eur2(a.cours) + '</span></span>' +
+          '<span class="montant">' + eur(m.val) + '</span></div>' +
+          '<div class="l2"><span class="pct ' + (m.val - m.inv >= 0 ? 'pos' : 'neg') + '">' + eur(m.val - m.inv) + '</span>' +
+          '<span class="barre"><div style="width:' + Math.max(3, Math.round(part * 100)) + '%"></div></span>' +
+          '<span class="pct">' + Math.round(part * 100) + '&thinsp;%</span></div></div>';
+      });
+      h += '<div class="stotal"><span>Sous-total ' + g.nom + '</span><span class="' + (gv - gi >= 0 ? 'pos' : 'neg') + '">' + eur(gv - gi) +
+        ' <span>(' + pct(gi ? (gv - gi) / gi : 0) + ')</span></span></span></div></div>';
+    });
+    h += '<div class="total"><span>TOTAL</span><span class="tval">' + eur(t.val) + ' · <span class="' +
+      (t.pv >= 0 ? 'pos' : 'neg') + '">' + pct(t.pvp) + '</span></span></div>';
+    h += '<div class="actions" style="margin-top:14px"><button class="btnmaj" onclick="majCours()"><span class="icmaj">🔄</span> Actualiser les cours</button></div>';
+  }
+  vue.innerHTML = h;
+}
+function kpi(l, v, cls) { return '<div class="kpi"><div class="lbl">' + l + '</div><div class="val ' + cls + '">' + v + '</div></div>'; }
+function rendreAnalyse(t) {
+  var parSupport = groupes().map(function (g) {
+    var v = 0; g.actifs.forEach(function (a) { v += montants(a).val; });
+    return { label: g.nom, val: v };
+  });
+  var h = '<div class="kpis">' +
+    kpi('Valeur totale', eur(t.val), '') +
+    kpi('Plus-value', pct(t.pvp), t.pv >= 0 ? 'pos' : 'neg') + '</div>';
+  h += '<div class="actions" style="margin:10px 0 14px;flex-direction:row"><button class="btn" style="flex:1" onclick="ajouterPoint()">📌 Enregistrer un point</button>' +
+    '<button class="btn ghost" style="flex:1" onclick="completerEtiquettes()">🪄 Compléter secteurs &amp; zones</button></div>';
+  h += '<div class="chartcard"><h3>Évolution du patrimoine</h3>' + courbe() + '</div>';
+  h += '<div class="chartcard"><h3>Répartition par support</h3>' + donut(parSupport) + '</div>';
+  var sec = repartition('secteur'); sec.champ = 'Secteur';
+  h += '<div class="chartcard"><h3>Secteurs</h3>' + donut(sec) + '</div>';
+  var zon = repartition('zone'); zon.champ = 'Zone';
+  h += '<div class="chartcard"><h3>Zones géographiques</h3>' + donut(zon) + '</div>';
+  vue.innerHTML = h;
+}
+function rendreReglages() {
+  vue.innerHTML =
+    '<h2>Cours automatiques</h2>' +
+    '<div class="reglage"><p>📅 <b>Une fois par jour, à l\'ouverture de l\'app</b>, tes cours se mettent à jour tout seuls ' +
+    '(le bouton 🔄 force une mise à jour à tout moment). ' +
+    'Hébergée sur Netlify avec le dossier fourni (index.html + <code>netlify/functions/cours.js</code>), ' +
+    'aucune clé n\'est nécessaire : Euronext couvert (CW8, AIR.PA, IWDA.AS…), cours convertis en euros automatiquement.<br><br>' +
+    '<b>Repli</b> (hébergement sans la fonction, titres américains uniquement) : ' +
+    'clé gratuite <code>Twelve Data</code> (twelvedata.com, 800 req/jour), collée ci-dessous. Elle reste sur ton téléphone.</p>' +
+    '<input id="cleApi" type="text" placeholder="Clé Twelve Data (facultatif)" value="' + (etat.cleApi || '') + '">' +
+    '<div style="margin-top:10px"><button class="btn" onclick="sauverCle()">💾 Enregistrer la clé</button></div></div>' +
+    '<h2>Mes données</h2>' +
+    '<div class="reglage"><p>Tes données restent dans le stockage local de ce téléphone : ' +
+    'aucun serveur, aucune connexion bancaire. Exporte-les pour les sauvegarder ou les transférer.</p>' +
+    '<div class="factions"><button class="btn ghost" onclick="exporter()">⬇️ Exporter (JSON)</button>' +
+    '<button class="btn ghost" onclick="document.getElementById(\'imp\').click()">⬆️ Importer</button></div>' +
+    '<input type="file" id="imp" accept=".json" style="display:none" onchange="importer(this)"></div>' +
+    '<h2>À propos</h2>' +
+    '<div class="reglage"><p><b>Octant · Suivi de portefeuille</b> — tes placements en un coup d’œil, cours actualisés chaque jour, sans connexion bancaire.<br><br>' +
+    'Cours indicatifs, parfois retardés. Outil de suivi personnel, pas un conseil en investissement.</p></div>';
+}
+
+/* ---------- CRUD actifs ---------- */
+var voile = document.getElementById('voile'), feuille = document.getElementById('feuille');
+function ouvrirForm(id) {
+  var a = id ? etat.actifs.filter(function (x) { return x.id === id; })[0] : null;
+  var supports = groupes().map(function (g) { return g.nom; });
+  var opts = ['PEA', 'Assurance vie', 'CTO', 'Livret A', 'PER', 'Autre']
+    .concat(supports).filter(function (v, i, s) { return s.indexOf(v) === i; })
+    .map(function (s) { return '<option' + ((a ? a.support : 'PEA') === s ? ' selected' : '') + '>' + s + '</option>'; }).join('');
+  feuille.innerHTML =
+    '<h3>' + (a ? 'Modifier l\'actif' : 'Nouvel actif') + '</h3>' +
+    '<label>Support</label><select id="f_support">' + opts + '</select>' +
+    '<label>Nom de l\'actif</label><input id="f_nom" placeholder="ex : Amundi MSCI World" value="' + (a ? a.nom : '') + '">' +
+    '<div class="deux"><div><label>Code (Ticker ou ISIN)</label><input id="f_code" placeholder="ex : CW8.PA ou FR0000121014" value="' + (a ? a.code : '') + '"></div>' +
+    '<div><label>Quantité</label><input id="f_qte" type="number" inputmode="decimal" placeholder="ex : 12,5" value="' + (a ? a.qte : '') + '"></div></div>' +
+    '<div class="deux"><div><label>PRU (€)</label><input id="f_pru" type="number" inputmode="decimal" step="any" placeholder="prix moyen" value="' + (a ? a.pru : '') + '"></div>' +
+    '<div><label>Cours (€)</label><input id="f_cours" type="number" inputmode="decimal" step="any" placeholder="actuel" value="' + (a ? a.cours : '') + '"></div></div>' +
+    '<div class="deux"><div><label>Secteur</label><input id="f_secteur" placeholder="auto ou ex : Cash" value="' + (a ? (a.secteur || '') : '') + '"></div>' +
+    '<div><label>Zone</label><input id="f_zone" placeholder="auto ou ex : USA" value="' + (a ? (a.zone || '') : '') + '"></div></div>' +
+    '<div id="f_auto" style="font-size:10px;color:var(--green);min-height:14px;margin-top:6px"></div>' +
+    '<div class="factions"><button class="btn" onclick="validerForm(' + (a ? '\'' + a.id + '\'' : 'null') + ')">✓ Enregistrer</button>' +
+    '<button class="btn ghost" onclick="fermerForm()">Annuler</button></div>' +
+    (a ? '<div class="factions"><button class="btn danger" onclick="supprimer(\'' + a.id + '\')">🗑 Supprimer cet actif</button></div>' : '');
+  ['f_nom', 'f_code'].forEach(function (f) { document.getElementById(f).addEventListener('input', autoEtiquettes); });
+  ['f_secteur', 'f_zone'].forEach(function (f) {
+    document.getElementById(f).addEventListener('input', function () {
+      this.dataset.auto = ''; this.dataset.manuel = '1';
+      var h = document.getElementById('f_auto'); if (h) h.textContent = '';
+    });
+  });
+  autoEtiquettes();
+  voile.classList.add('ouvert');
+}
+/* Remplissage automatique de Secteur et Zone pendant la saisie :
+   ne touche jamais une valeur saisie ou déjà présente à la main. */
+function autoEtiquettes() {
+  var fs = document.getElementById('f_secteur'), fz = document.getElementById('f_zone');
+  var hint = document.getElementById('f_auto');
+  if (!fs || !fz) return;
+  var s = suggestion(document.getElementById('f_nom').value.trim(), document.getElementById('f_code').value.trim());
+  var poser = function (el, v) {
+    if (el.value && !el.dataset.auto) return;            // saisi à la main : on préserve
+    if (v) { el.value = v; el.dataset.auto = '1'; }
+    else { el.value = ''; el.dataset.auto = ''; }
+  };
+  if (!s) { poser(fs, ''); poser(fz, ''); if (hint) hint.textContent = ''; return; }
+  poser(fs, s.sec); poser(fz, s.zone);
+  if (hint) hint.textContent = '🪄 ' + s.via + ' — modifiable';
+}
+function fermerForm() { voile.classList.remove('ouvert'); }
+function validerForm(id) {
+  var g = function (f) { return document.getElementById(f).value.trim(); };
+  var n = function (f) { var v = document.getElementById(f).value.replace(',', '.'); return v === '' ? 0 : parseFloat(v); };
+  var nom = g('f_nom');
+  if (!nom) { toast('Donne un nom à ton actif.'); return; }
+  var objet = {
+    id: id || uid(), support: g('f_support') || 'Autre', nom: nom,
+    code: g('f_code'), qte: n('f_qte'), pru: n('f_pru'), cours: n('f_cours'),
+    secteur: g('f_secteur'), zone: g('f_zone')
+  };
+  if (!objet.cours) objet.cours = objet.pru;
+  var i = etat.actifs.map(function (x) { return x.id; }).indexOf(objet.id);
+  if (i === -1) etat.actifs.push(objet); else etat.actifs[i] = objet;
+  sauver(); fermerForm(); rendre(onglet); toast('✓ ' + nom + ' enregistré');
+}
+function supprimer(id) {
+  etat.actifs = etat.actifs.filter(function (a) { return a.id !== id; });
+  sauver(); fermerForm(); rendre(onglet); toast('Actif supprimé');
+}
+function ouvrirActif(id) { ouvrirForm(id); }
+voile.addEventListener('click', function (e) { if (e.target === voile) fermerForm(); });
+
+/* ---------- Historique ---------- */
+function ajouterPoint() {
+  var t = totaux();
+  var auj = new Date().toISOString().slice(0, 10);
+  etat.historique = etat.historique.filter(function (p) { return p.date !== auj; });
+  etat.historique.push({ date: auj, investi: t.inv, valeur: t.val });
+  etat.historique.sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+  sauver(); rendre(onglet); toast('📌 Point du ' + dateFR(auj) + ' enregistré');
+}
+
+/* ---------- Toast + sauvegarde de la clé de repli ---------- */
+function toast(msg) {
+  var el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('vu');
+  clearTimeout(el._t); el._t = setTimeout(function () { el.classList.remove('vu'); }, 3200);
+}
+function sauverCle() {
+  etat.cleApi = document.getElementById('cleApi').value.trim();
+  sauver(); toast('✓ Clé enregistrée');
+}
+/* ---------- Mise a jour des cours : quotidienne automatique + bouton ---------- */
+/* Appelée automatiquement à l'ouverture de l'app (une fois par jour) et via
+   le bouton 🔄. Source principale : la fonction Netlify cours.js (proxy Yahoo
+   Finance, couvre Euronext, convertit en euros, aucune clé). Repli si
+   l'app est hébergée sans la fonction : Twelve Data (titres US, clé perso). */
+function majCours(auto) {
+  var cibles = etat.actifs.filter(function (a) { return a.code; });
+  if (!cibles.length) { if (!auto) toast('Aucun actif avec un code de cotation.'); return; }
+  var bm = document.getElementById('btnmaj'), bl = document.getElementById('btnmajlbl');
+  if (bm) { bm.disabled = true; bm.classList.add('tourne'); }
+  if (bl) bl.textContent = 'Actualisation…';
+  if (!auto) toast('⏳ Actualisation de ' + cibles.length + ' cours...');
+  var codes = cibles.map(function (a) { return a.code; }).join(',');
+  var noms = cibles.map(function (a) { return (a.nom || '').replace(/[|,]/g, ' '); }).join('|');
+  fetch('/.netlify/functions/cours?codes=' + encodeURIComponent(codes) + '&noms=' + encodeURIComponent(noms))
+    .then(function (r) { if (!r.ok) throw new Error('fonction'); return r.json(); })
+    .then(function (d) {
+      var ok = 0, echecs = (d && d.echecs) || [], alertes = [];
+      cibles.forEach(function (a) {
+        var p = d && d.resultat && (d.resultat[String(a.code).toUpperCase()] || d.resultat[a.code]);
+        if (p) { a.cours = p; ok++; }
+        else if (echecs.indexOf(a.code) === -1) echecs.push(a.code);
+      });
+      var det = (d && d.detail) || {};
+      cibles.forEach(function (a) {
+        var info = det[String(a.code).toUpperCase()];
+        if (info && info.confiance === 'douteux') alertes.push(a.nom + ' : trouvé « ' + (info.nom || info.ticker) + ' » — vérifie le code (l\'ISIN marche aussi)');
+        else if (a.pru && a.cours && (a.cours / a.pru > 20 || a.cours / a.pru < 0.05)) alertes.push(a.nom + ' : cours très éloigné du PRU — vérifie le code ou le PRU');
+      });
+      finMaj(auto, ok, echecs, alertes);
+    })
+    .catch(function () {
+      if (etat.cleApi) majCoursTwelveData(auto, cibles);
+      else finMaj(auto, 0, cibles.map(function (a) { return a.code; }));
+    });
+}
+function finMaj(auto, ok, echecs, alertes) {
+  var bm = document.getElementById('btnmaj'), bl = document.getElementById('btnmajlbl');
+  if (bm) { bm.disabled = false; bm.classList.remove('tourne'); }
+  if (bl) bl.textContent = 'Actualiser les cours';
+  if (ok) {
+    etat.derniereMaj = new Date().toLocaleDateString('fr-FR');
+    etat.derniereMajIso = new Date().toISOString().slice(0, 10);
+  }
+  sauver(); rendre(onglet);
+  var msg;
+  if (ok) msg = (auto ? '🔄 Cours actualisés automatiquement (' + ok + ')'
+    : ok + ' cours actualisés' + (echecs.length ? ' — échecs : ' + echecs.join(', ') : ' ✓'));
+  else msg = 'Échec de l\'actualisation — héberge l\'app avec la fonction cours.js (mode d\'emploi en tête de fichier) ou ajoute une clé Twelve Data dans Réglages.';
+  if (alertes && alertes.length) msg += '  ⚠️ À vérifier : ' + alertes.join(' · ');
+  toast(msg);
+}
+/* Repli Twelve Data : un appel par titre (limite gratuite 8/minute). */
+function majCoursTwelveData(auto, cibles) {
+  var ok = 0, echecs = [];
+  (function suivant(i) {
+    if (i >= cibles.length) { finMaj(auto, ok, echecs); return; }
+    var a = cibles[i];
+    fetch('https://api.twelvedata.com/price?symbol=' + encodeURIComponent(a.code) + '&apikey=' + etat.cleApi)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.price) { a.cours = parseFloat(d.price); ok++; }
+        else echecs.push(a.code);
+      })
+      .catch(function () { echecs.push(a.code); })
+      .then(function () {
+        var delai = ((i + 1) % 8 === 0 && i + 1 < cibles.length) ? 61000 : 250;
+        if (delai > 250 && !auto) toast('⏳ Limite gratuite (8/min) — reprise dans 1 min…');
+        setTimeout(function () { suivant(i + 1); }, delai);
+      });
+  })(0);
+}
+
+/* ---------- Compléter secteurs & zones (reconnaissance hors ligne + API) ---------- */
+var TRAD_PAYS = { 'United States': 'USA', 'United Kingdom': 'Royaume-Uni', 'Japan': 'Japon',
+  'Germany': 'Allemagne', 'Netherlands': 'Pays-Bas', 'Switzerland': 'Suisse', 'Italy': 'Italie',
+  'Spain': 'Espagne', 'Belgium': 'Belgique', 'France': 'France' };
+function completerEtiquettes() {
+  var cibles = etat.actifs.filter(function (a) { return !(a.secteur && a.zone); });
+  if (!cibles.length) { toast('✓ Secteurs et zones déjà renseignés'); return; }
+  var viaApi = [];
+  cibles.forEach(function (a) {
+    var s = suggestion(a.nom, a.code);
+    if (s) {
+      if (s.sec && !a.secteur) a.secteur = s.sec;
+      if (s.zone && !a.zone) a.zone = s.zone;
+    }
+    if (a.code && a.code.indexOf('.') === -1 && !a.zone && etat.cleApi) viaApi.push(a);
+  });
+  var finir = function () {
+    sauver(); rendre(onglet);
+    var restes = etat.actifs.filter(function (a) { return !a.secteur || !a.zone; }).map(function (a) { return a.nom; });
+    var msg = '🪄 ' + (cibles.length - restes.length) + ' actif(s) complété(s) automatiquement';
+    if (restes.length) msg += ' — secteur/zone à saisir à la main : ' + restes.slice(0, 4).join(', ') + (restes.length > 4 ? '…' : '');
+    toast(msg);
+  };
+  if (!viaApi.length) { finir(); return; }
+  toast('⏳ Recherche du pays pour ' + viaApi.length + ' code(s)...');
+  (function suivant(i) {
+    if (i >= viaApi.length) { finir(); return; }
+    var a = viaApi[i];
+    fetch('https://api.twelvedata.com/stocks?symbol=' + encodeURIComponent(a.code) + '&apikey=' + etat.cleApi)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var pays = d && d.data && d.data[0] && d.data[0].country;
+        if (pays && !a.zone) a.zone = TRAD_PAYS[pays] || pays;
+      })
+      .catch(function () {})
+      .then(function () { setTimeout(function () { suivant(i + 1); }, 250); });  // respecte la limite gratuite
+  })(0);
+}
+
+/* ---------- Export / import ---------- */
+function exporter() {
+  var blob = new Blob([JSON.stringify(etat, null, 2)], { type: 'application/json' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'octant-portefeuille.json';
+  a.click(); URL.revokeObjectURL(a.href);
+  toast('⬇️ Export téléchargé');
+}
+function importer(input) {
+  var f = input.files[0]; if (!f) return;
+  var fr = new FileReader();
+  fr.onload = function () {
+    try {
+      var d = JSON.parse(fr.result);
+      if (!d.actifs) throw new Error('format');
+      etat = d; sauver(); rendre(onglet); toast('⬆️ Données importées ✓');
+    } catch (e) { toast('Fichier invalide.'); }
+  };
+  fr.readAsText(f);
+}
+
+/* ---------- Navigation ---------- */
+var onglet = 'pf';
+document.querySelectorAll('nav button').forEach(function (b) {
+  b.addEventListener('click', function () {
+    onglet = b.dataset.tab;
+    document.querySelectorAll('nav button').forEach(function (x) { x.classList.toggle('actif', x === b); });
+    rendre(onglet);
+  });
+});
+document.getElementById('fab').addEventListener('click', function () { ouvrirForm(null); });
+
+/* Service worker : actif uniquement une fois le fichier heberge (cf. en-tete du script) */
+if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+  navigator.serviceWorker.register('sw.js').catch(function () {});
+}
+rendre(onglet);
+/* Actualisation quotidienne automatique : une fois par jour, à l'ouverture
+   de l'app — le seul moment où une PWA sans serveur peut agir. Silencieuse :
+   le bandeau d'en-tête affiche le résultat, la signature reste vraie. */
+if (etat.derniereMajIso !== new Date().toISOString().slice(0, 10) &&
+    etat.actifs.some(function (a) { return a.code; })) majCours(true);
+</script>
+</body>
+</html>
