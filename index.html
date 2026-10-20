@@ -10,8 +10,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Octant">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237DD3FC'/%3E%3Cstop offset='1' stop-color='%2334D399'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='512' height='512' rx='110' fill='%230F172A'/%3E%3Cpath d='M256 126 A130 130 0 1 1 126 256' fill='none' stroke='url(%23g)' stroke-width='36' stroke-linecap='round'/%3E%3Cpath d='M96 272 L156 272 L126 188 Z' fill='url(%23g)'/%3E%3C/svg%3E">
-<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237DD3FC'/%3E%3Cstop offset='1' stop-color='%2334D399'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='512' height='512' rx='110' fill='%230F172A'/%3E%3Cpath d='M256 126 A130 130 0 1 1 126 256' fill='none' stroke='url(%23g)' stroke-width='36' stroke-linecap='round'/%3E%3Cpath d='M96 272 L156 272 L126 188 Z' fill='url(%23g)'/%3E%3C/svg%3E">
-<link rel="manifest" href='data:application/manifest+json,{"name":"Octant · Suivi de portefeuille","short_name":"Octant","start_url":".","display":"standalone","background_color":"%230F172A","theme_color":"%230F172A","icons":[{"src":"data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 512 512%27%3E%3Cdefs%3E%3ClinearGradient id=%27g%27 x1=%270%27 y1=%270%27 x2=%271%27 y2=%271%27%3E%3Cstop offset=%270%27 stop-color=%27%237DD3FC%27/%3E%3Cstop offset=%271%27 stop-color=%27%2334D399%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%27512%27 height=%27512%27 rx=%27110%27 fill=%27%230F172A%27/%3E%3Cpath d=%27M256 126 A130 130 0 1 1 126 256%27 fill=%27none%27 stroke=%27url(%23g)%27 stroke-width=%2736%27 stroke-linecap=%27round%27/%3E%3Cpath d=%27M96 272 L156 272 L126 188 Z%27 fill=%27url(%23g)%27/%3E%3C/svg%3E","sizes":"512x512","type":"image/svg+xml"}]}'>
+<link rel="apple-touch-icon" href="icon-512.png">
+<link rel="manifest" href='data:application/manifest+json,{"name":"Octant · Suivi de portefeuille","short_name":"Octant","start_url":".","display":"standalone","background_color":"%230F172A","theme_color":"%230F172A","icons":[{"src":"icon-512.png","sizes":"512x512","type":"image/png"},{"src":"data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 512 512%27%3E%3Cdefs%3E%3ClinearGradient id=%27g%27 x1=%270%27 y1=%270%27 x2=%271%27 y2=%271%27%3E%3Cstop offset=%270%27 stop-color=%27%237DD3FC%27/%3E%3Cstop offset=%271%27 stop-color=%27%2334D399%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%27512%27 height=%27512%27 rx=%27110%27 fill=%27%230F172A%27/%3E%3Cpath d=%27M256 126 A130 130 0 1 1 126 256%27 fill=%27none%27 stroke=%27url(%23g)%27 stroke-width=%2736%27 stroke-linecap=%27round%27/%3E%3Cpath d=%27M96 272 L156 272 L126 188 Z%27 fill=%27url(%23g)%27/%3E%3C/svg%3E","sizes":"512x512","type":"image/svg+xml"}]}'>
 <title>Octant · Suivi de portefeuille</title>
 <style>
   :root {
@@ -23,7 +23,7 @@
   html, body { height: 100%; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
-    background: var(--bg); color: var(--text); padding-bottom: calc(112px + env(safe-area-inset-bottom));  /* 112px : le TOTAL et son filet bleu ne passent jamais derriere la nav du bas */
+    background: var(--bg); color: var(--text); padding-bottom: calc(150px + env(safe-area-inset-bottom));  /* 150px : garde de l'air entre le dernier element (TOTAL ou dernier camembert) et la nav du bas */
   }
   /* ---------- En-tete ---------- */
   header { padding: calc(18px + env(safe-area-inset-top)) 18px 10px; }
@@ -50,6 +50,16 @@
   .btnmaj .icmaj { display: inline-block; font-size: 14px; line-height: 1; }
   .btnmaj.tourne .icmaj { animation: tourne .9s linear infinite; }
   @keyframes tourne { to { transform: rotate(360deg); } }
+  /* Bouton d'ajout d'actif : pilule discrete sous le bouton d'actualisation */
+  .btnajout {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: rgba(56,189,248,.14); color: var(--line);
+    font-weight: 800; font-size: 12px;
+    padding: 9px 16px; border-radius: 999px; cursor: pointer; font-family: inherit;
+    border: 1px solid rgba(125,211,252,.35);
+  }
+  .btnajout:active { transform: scale(.96); }
+  .btnajout .icmaj { display: inline-block; font-size: 14px; line-height: 1; }
   /* ---------- Cartes KPI ---------- */
   .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 6px 18px 4px; }
   .kpi { background: var(--card2); border-radius: 14px; padding: 10px 12px 9px; }
@@ -160,6 +170,7 @@
     <div class="titre">Octant · Suivi de portefeuille</div>
     <div class="signature">Tes placements en un coup d’œil, cours actualisés chaque jour, sans connexion bancaire.</div>
     <div class="majrow"><span class="maj" id="maj"></span><button class="btnmaj" id="btnmaj" onclick="majCours()" title="Actualiser les cours"><span class="icmaj">🔄</span> <span id="btnmajlbl">Actualiser les cours</span></button></div>
+    <div style="margin-top:8px"><button class="btnajout" onclick="ouvrirForm(null)"><span class="icmaj">➕</span> Ajouter un actif</button></div>
   </header>
   <main id="vue"></main>
   <nav>
@@ -180,7 +191,7 @@
    HEBERGEMENT (Netlify connecte a GitHub — cours automatiques sans clé API) :
    1. Deposer les fichiers dans le dépôt GitHub 'octant' :
          index.html                    <- ce fichier (a la racine)
-         (le logo est deja integre dans index.html — aucun fichier image a ajouter)
+         icon-512.png                  <- icone du raccourci ecran d'accueil (PNG 512x512)
          package.json                  <- { 'engines': { 'node': '>=18' } }
          netlify/functions/cours.js    <- fichier fourni a part (v3 : identite + ISIN)
          sw.js                         <- code ci-dessous (optionnel : hors ligne Android)
@@ -422,9 +433,8 @@ function rendrePortefeuille(t) {
   var h = '';
   if (!etat.actifs.length) {
     h = '<div class="vide" style="margin:30px 18px"><b>Bienvenue sur Octant 👋</b><br><br>' +
-      'Ajoute ton premier actif avec le bouton ci-dessous :<br>action, ETF, fonds en euros, livret…<br>' +
-      'Aucune connexion bancaire, aucune inscription.<br>Tes données restent sur ton téléphone.</div>' +
-      '<div class="actions" style="margin-top:6px"><button class="btnmaj" onclick="ouvrirForm(null)"><span class="icmaj">➕</span> Ajouter un actif</button></div>';
+      'Ajoute ton premier actif avec le bouton « Ajouter un actif » en haut :<br>action, ETF, fonds en euros, livret…<br>' +
+      'Aucune connexion bancaire, aucune inscription.<br>Tes données restent sur ton téléphone.</div>';
   } else {
     h = '<div class="kpis">' +
       kpi('Valeur totale', eur(t.val), '') +
@@ -453,8 +463,6 @@ function rendrePortefeuille(t) {
     });
     h += '<div class="total"><span>TOTAL</span><span class="tval">' + eur(t.val) + ' · <span class="' +
       (t.pv >= 0 ? 'pos' : 'neg') + '">' + pct(t.pvp) + '</span></span></div>';
-    h += '<div class="actions" style="margin-top:14px"><button class="btnmaj" onclick="majCours()"><span class="icmaj">🔄</span> Actualiser les cours</button>' +
-      '<button class="btnmaj" onclick="ouvrirForm(null)"><span class="icmaj">➕</span> Ajouter un actif</button></div>';
   }
   vue.innerHTML = h;
 }
