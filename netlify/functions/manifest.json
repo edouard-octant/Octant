@@ -1,11 +1,1 @@
-{
-  "name": "Octant · Suivi de portefeuille",
-  "short_name": "Octant",
-  "start_url": ".",
-  "display": "standalone",
-  "background_color": "#0F172A",
-  "theme_color": "#0F172A",
-  "icons": [
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
-  ]
-}
+
