@@ -9,8 +9,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Octant">
-<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%230F172A'/%3E%3Ctext x='90' y='122' font-size='96' font-family='Arial' font-weight='bold' text-anchor='middle' fill='%237DD3FC'%3EO%3C/text%3E%3Ccircle cx='90' cy='90' r='10' fill='%2334D399'/%3E%3C/svg%3E">
-<link rel="manifest" href='data:application/manifest+json,{"name":"Octant · Suivi de portefeuille","short_name":"Octant","start_url":".","display":"standalone","background_color":"%230F172A","theme_color":"%230F172A","icons":[{"src":"data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 512 512%27%3E%3Crect width=%27512%27 height=%27512%27 rx=%27110%27 fill=%27%230F172A%27/%3E%3Ctext x=%27256%27 y=%27340%27 font-size=%27260%27 font-family=%27Arial%27 font-weight=%27bold%27 text-anchor=%27middle%27 fill=%27%237DD3FC%27%3EO%3C/text%3E%3Ccircle cx=%27256%27 cy=%27256%27 r=%2730%27 fill=%27%2334D399%27/%3E%3C/svg%3E","sizes":"512x512","type":"image/svg+xml"}]}'>
+<link rel="icon" href="icon-512.png">
+<link rel="apple-touch-icon" href="icon-512.png">
+<link rel="manifest" href='data:application/manifest+json,{"name":"Octant · Suivi de portefeuille","short_name":"Octant","start_url":".","display":"standalone","background_color":"%230F172A","theme_color":"%230F172A","icons":[{"src":"https://octant-suiviportefeuille.netlify.app/icon-512.png","sizes":"512x512","type":"image/png"}]}'>
 <title>Octant · Suivi de portefeuille</title>
 <style>
   :root {
@@ -22,7 +23,7 @@
   html, body { height: 100%; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
-    background: var(--bg); color: var(--text); padding-bottom: calc(112px + env(safe-area-inset-bottom));
+    background: var(--bg); color: var(--text); padding-bottom: calc(112px + env(safe-area-inset-bottom));  /* 112px : le TOTAL et son filet bleu ne passent jamais derriere la nav du bas */
   }
   /* ---------- En-tete ---------- */
   header { padding: calc(18px + env(safe-area-inset-top)) 18px 10px; }
@@ -96,12 +97,6 @@
   .btn.danger { background: rgba(248,113,113,.15); color: var(--danger); }
   .btn.wide { width: 100%; }
   .actions { display: flex; flex-direction: column; gap: 10px; padding: 4px 18px; }
-  .fab {
-    position: fixed; right: 18px; bottom: calc(86px + env(safe-area-inset-bottom));
-    width: 54px; height: 54px; border-radius: 18px; border: none; cursor: pointer;
-    background: linear-gradient(135deg, #7DD3FC, #34D399); color: #062033;
-    font-size: 30px; font-weight: 300; line-height: 1; box-shadow: 0 6px 18px rgba(56,189,248,.35);
-  }
   /* ---------- Nav du bas ---------- */
   nav {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
@@ -167,7 +162,6 @@
     <div class="majrow"><span class="maj" id="maj"></span><button class="btnmaj" id="btnmaj" onclick="majCours()" title="Actualiser les cours"><span class="icmaj">🔄</span> <span id="btnmajlbl">Actualiser les cours</span></button></div>
   </header>
   <main id="vue"></main>
-  <button class="fab" id="fab" title="Ajouter un actif">+</button>
   <nav>
     <button data-tab="pf" class="actif"><span class="ic">📋</span>Portefeuille</button>
     <button data-tab="an"><span class="ic">📊</span>Analyse</button>
@@ -186,6 +180,7 @@
    HEBERGEMENT (Netlify connecte a GitHub — cours automatiques sans clé API) :
    1. Deposer les fichiers dans le dépôt GitHub 'octant' :
          index.html                    <- ce fichier (a la racine)
+         icon-512.png                  <- logo de l'app (a la racine)
          package.json                  <- { 'engines': { 'node': '>=18' } }
          netlify/functions/cours.js    <- fichier fourni a part (v3 : identite + ISIN)
          sw.js                         <- code ci-dessous (optionnel : hors ligne Android)
@@ -416,8 +411,6 @@ function rendre(tab) {
   var t = totaux();
   var auj = new Date().toISOString().slice(0, 10);
   var elMaj = document.getElementById('maj');
-  var elFab = document.getElementById('fab');
-  if (elFab) elFab.style.display = tab === 'pf' ? '' : 'none';
   if (etat.derniereMajIso === auj) elMaj.textContent = 'Cours actualisés automatiquement aujourd\'hui ✓';
   else if (etat.derniereMaj) elMaj.textContent = 'Cours actualisés chaque jour à l\'ouverture — dernier : ' + etat.derniereMaj;
   else elMaj.textContent = 'Actualisation automatique quotidienne à l\'ouverture de l\'app';
@@ -429,8 +422,9 @@ function rendrePortefeuille(t) {
   var h = '';
   if (!etat.actifs.length) {
     h = '<div class="vide" style="margin:30px 18px"><b>Bienvenue sur Octant 👋</b><br><br>' +
-      'Ajoute ton premier actif avec le bouton <b>+</b> :<br>action, ETF, fonds en euros, livret…<br>' +
-      'Aucune connexion bancaire, aucune inscription.<br>Tes données restent sur ton téléphone.</div>';
+      'Ajoute ton premier actif avec le bouton ci-dessous :<br>action, ETF, fonds en euros, livret…<br>' +
+      'Aucune connexion bancaire, aucune inscription.<br>Tes données restent sur ton téléphone.</div>' +
+      '<div class="actions" style="margin-top:6px"><button class="btnmaj" onclick="ouvrirForm(null)"><span class="icmaj">➕</span> Ajouter un actif</button></div>';
   } else {
     h = '<div class="kpis">' +
       kpi('Valeur totale', eur(t.val), '') +
@@ -459,7 +453,8 @@ function rendrePortefeuille(t) {
     });
     h += '<div class="total"><span>TOTAL</span><span class="tval">' + eur(t.val) + ' · <span class="' +
       (t.pv >= 0 ? 'pos' : 'neg') + '">' + pct(t.pvp) + '</span></span></div>';
-    h += '<div class="actions" style="margin-top:14px"><button class="btnmaj" onclick="majCours()"><span class="icmaj">🔄</span> Actualiser les cours</button></div>';
+    h += '<div class="actions" style="margin-top:14px"><button class="btnmaj" onclick="majCours()"><span class="icmaj">🔄</span> Actualiser les cours</button>' +
+      '<button class="btnmaj" onclick="ouvrirForm(null)"><span class="icmaj">➕</span> Ajouter un actif</button></div>';
   }
   vue.innerHTML = h;
 }
@@ -738,8 +733,6 @@ document.querySelectorAll('nav button').forEach(function (b) {
     rendre(onglet);
   });
 });
-document.getElementById('fab').addEventListener('click', function () { ouvrirForm(null); });
-
 /* Service worker : actif uniquement une fois le fichier heberge (cf. en-tete du script) */
 if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
   navigator.serviceWorker.register('sw.js').catch(function () {});
