@@ -416,6 +416,8 @@ function rendre(tab) {
   var t = totaux();
   var auj = new Date().toISOString().slice(0, 10);
   var elMaj = document.getElementById('maj');
+  var elFab = document.getElementById('fab');
+  if (elFab) elFab.style.display = tab === 'pf' ? '' : 'none';
   if (etat.derniereMajIso === auj) elMaj.textContent = 'Cours actualisés automatiquement aujourd\'hui ✓';
   else if (etat.derniereMaj) elMaj.textContent = 'Cours actualisés chaque jour à l\'ouverture — dernier : ' + etat.derniereMaj;
   else elMaj.textContent = 'Actualisation automatique quotidienne à l\'ouverture de l\'app';
