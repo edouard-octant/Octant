@@ -20,7 +20,7 @@
     --pos: #4ADE80; --neg: #FB7185; --danger: #F87171;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { height: 100%; }
+  html, body { min-height: 100%; }  /* min-height (et non height) : laisse la page grandir, la marge basse est alors respectée et on peut défiler jusqu'au bout */
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
     background: var(--bg); color: var(--text); padding-bottom: calc(150px + env(safe-area-inset-bottom));  /* 150px : garde de l'air entre le dernier element (TOTAL ou dernier camembert) et la nav du bas */
@@ -190,7 +190,7 @@
          icon-512.png                  <- icone du raccourci ecran d'accueil (PNG 512x512)
          manifest.json                 <- petit fichier fourni ci-dessous (installation propre)
          package.json                  <- { 'engines': { 'node': '>=18' } }
-         netlify/functions/cours.js    <- fichier fourni a part (v3 : identite + ISIN)
+         netlify/functions/cours.js    <- fichier fourni a part (v4 : identite + ISIN + secteurs/zones)
          sw.js                         <- code ci-dessous (optionnel : hors ligne Android)
    2. Sur Netlify : Add new project > importer depuis GitHub, tout par defaut.
       Mise a jour ulterieure : modifier les fichiers sur GitHub ; Netlify
@@ -201,7 +201,7 @@
    couvre Euronext (CW8, AIR.PA, IWDA.AS...), convertit en euros et sert
    les cours a l'app. Aucune clé API, rien a configurer pour l'acheteur.
 
-      // netlify/functions/cours.js : FICHIER FOURNI A PART (version 3).
+      // netlify/functions/cours.js : FICHIER FOURNI A PART (version 4).
       // v3 - sécurite des cours : 
       //   - verification d'identite : le nom du titre renvoye par Yahoo doit
       //     correspondre au nom de l'actif saisi (evite les faux cours AL, WLB, BI) ;
@@ -209,9 +209,14 @@
       //   - exceptions mnémoniques : AL->AI.PA, FP->TTE.PA, WLB->WLN.PA, BI->BIM.PA ;
       //   - réponse JSON avec champ 'detail' par actif : ticker, nom, confiance
       //     (verifie / pa / douteux) -> l'app affiche un bandeau si douteux.
+      // v4 - secteurs & zones automatiques :
+      //   - nouveau parametre 'manque' : codes dont il manque le secteur ou la zone ;
+      //   - réponse JSON avec champ 'etiquettes' par code : secteur + zone issus
+      //     de la fiche société Yahoo (Technologie, USA, France...) ;
+      //   - l'app complète les étiquettes à l'ajout d'un actif, ou via le bouton 🪄.
 
       // sw.js (optionnel : hors ligne + installation Android complete)
-      const C = 'octant-v1';
+      const C = 'octant-v2';
       self.addEventListener('install', e => self.skipWaiting());
       self.addEventListener('fetch', e => {
         if (e.request.url.indexOf('/.netlify/functions/') !== -1) {   // cours : réseau d'abord
@@ -371,7 +376,7 @@ function repartition(champ) {
 /* ---------- Composants SVG ---------- */
 function donut(items) {
   var total = 0; items.forEach(function (i) { total += i.val; });
-  if (!total) return '<div class="vide">Aucune donnée.<br>« ' + (items.champ || 'Secteur') + ' » se remplit automatiquement :<br>profils ETF reconnus depuis le nom ou le code,<br>ou bouton 🪄 dans l\'onglet Analyse.</div>';
+  if (!total) return '<div class="vide">Aucune donnée.<br>« ' + (items.champ || 'Secteur') + ' » se remplit automatiquement à l\'ajout<br>d\'un actif (fiche société du code boursier),<br>ou bouton 🪄 dans l\'onglet Analyse.</div>';
   var C = 2 * Math.PI * 40, off = 0, segs = '';
   items.forEach(function (i, k) {
     var len = i.val / total * C;
@@ -567,6 +572,7 @@ function validerForm(id) {
   var i = etat.actifs.map(function (x) { return x.id; }).indexOf(objet.id);
   if (i === -1) etat.actifs.push(objet); else etat.actifs[i] = objet;
   sauver(); fermerForm(); rendre(onglet); toast('✓ ' + nom + ' enregistré');
+  if (objet.code && (!objet.secteur || !objet.zone)) setTimeout(completerEtiquettes, 600);  // secteur & zone automatiques
 }
 function supprimer(id) {
   etat.actifs = etat.actifs.filter(function (a) { return a.id !== id; });
@@ -669,20 +675,18 @@ function majCoursTwelveData(auto, cibles) {
 }
 
 /* ---------- Compléter secteurs & zones (reconnaissance hors ligne + API) ---------- */
-var TRAD_PAYS = { 'United States': 'USA', 'United Kingdom': 'Royaume-Uni', 'Japan': 'Japon',
-  'Germany': 'Allemagne', 'Netherlands': 'Pays-Bas', 'Switzerland': 'Suisse', 'Italy': 'Italie',
-  'Spain': 'Espagne', 'Belgium': 'Belgique', 'France': 'France' };
+/* Étiquettes automatiques : suggestions hors ligne (profils ETF, suffixes),
+   puis la fonction cours.js renvoie la fiche société (secteur + zone)
+   pour les codes incomplets — aucun compte, aucune clé nécessaire. */
 function completerEtiquettes() {
   var cibles = etat.actifs.filter(function (a) { return !(a.secteur && a.zone); });
   if (!cibles.length) { toast('✓ Secteurs et zones déjà renseignés'); return; }
-  var viaApi = [];
   cibles.forEach(function (a) {
     var s = suggestion(a.nom, a.code);
     if (s) {
       if (s.sec && !a.secteur) a.secteur = s.sec;
       if (s.zone && !a.zone) a.zone = s.zone;
     }
-    if (a.code && a.code.indexOf('.') === -1 && !a.zone && etat.cleApi) viaApi.push(a);
   });
   var finir = function () {
     sauver(); rendre(onglet);
@@ -691,20 +695,25 @@ function completerEtiquettes() {
     if (restes.length) msg += ' — secteur/zone à saisir à la main : ' + restes.slice(0, 4).join(', ') + (restes.length > 4 ? '…' : '');
     toast(msg);
   };
-  if (!viaApi.length) { finir(); return; }
-  toast('⏳ Recherche du pays pour ' + viaApi.length + ' code(s)...');
-  (function suivant(i) {
-    if (i >= viaApi.length) { finir(); return; }
-    var a = viaApi[i];
-    fetch('https://api.twelvedata.com/stocks?symbol=' + encodeURIComponent(a.code) + '&apikey=' + etat.cleApi)
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        var pays = d && d.data && d.data[0] && d.data[0].country;
-        if (pays && !a.zone) a.zone = TRAD_PAYS[pays] || pays;
-      })
-      .catch(function () {})
-      .then(function () { setTimeout(function () { suivant(i + 1); }, 250); });  // respecte la limite gratuite
-  })(0);
+  var aCompleter = cibles.filter(function (a) { return a.code && (!a.secteur || !a.zone); }).slice(0, 8);
+  if (!aCompleter.length) { finir(); return; }
+  var codes = aCompleter.map(function (a) { return a.code.toUpperCase(); }).join(',');
+  var noms = aCompleter.map(function (a) { return a.nom; }).join('|');
+  toast('⏳ Recherche du secteur et de la zone…');
+  fetch('/.netlify/functions/cours?codes=' + encodeURIComponent(codes) + '&noms=' + encodeURIComponent(noms) +
+        '&manque=' + encodeURIComponent(codes))
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var et = (d && d.etiquettes) || {};
+      aCompleter.forEach(function (a) {
+        var e = et[a.code.toUpperCase()];
+        if (!e) return;
+        if (e.secteur && !a.secteur) a.secteur = e.secteur;
+        if (e.zone && !a.zone) a.zone = e.zone;
+      });
+      finir();
+    })
+    .catch(function () { finir(); });
 }
 
 /* ---------- Export / import ---------- */
