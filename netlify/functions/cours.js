@@ -1,6 +1,7 @@
 const YCHART = 'https://query1.finance.yahoo.com/v8/finance/chart/';
 const YCHART2 = 'https://query2.finance.yahoo.com/v8/finance/chart/';
 const YSEARCH = 'https://query1.finance.yahoo.com/v1/finance/search?q=';
+const YPROFIL = 'https://query2.finance.yahoo.com/v10/finance/quoteSummary/';
 const ENTETES = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' };
 const MARCHES_EURO = /\.(PA|AS|L|MI|DE|MC|BR|SW|NX)/;
 const DELAI = 4000;  // délai max par requête : jamais d'attente infinie
@@ -10,17 +11,29 @@ const DELAI = 4000;  // délai max par requête : jamais d'attente infinie
 // 'FP' = TotalEnergies ; 'WLB' = Worldline (maintenant WLN) ; 'BI' = bioMérieux (maintenant BIM)
 const EXCEPTIONS = { 'AL': 'AI.PA', 'FP': 'TTE.PA', 'WLB': 'WLN.PA', 'BI': 'BIM.PA' };
 
-async function allez(url) {
+// Fiche société Yahoo (secteur + pays) -> étiquettes françaises de l'app.
+const SEC_FR = { 'Technology': 'Technologie', 'Financial Services': 'Financier',
+  'Healthcare': 'Santé', 'Consumer Cyclical': 'Consommation', 'Consumer Defensive': 'Consommation',
+  'Industrials': 'Industrie', 'Basic Materials': 'Matériaux', 'Energy': 'Énergie',
+  'Utilities': 'Services publics', 'Real Estate': 'Immobilier', 'Communication Services': 'Communication' };
+const PAYS_ZONE = { 'United States': 'USA', 'United Kingdom': 'Royaume-Uni', 'Japan': 'Japon',
+  'Germany': 'Allemagne', 'Netherlands': 'Pays-Bas', 'Switzerland': 'Suisse', 'Italy': 'Italie',
+  'Spain': 'Espagne', 'Belgium': 'Belgique', 'France': 'France', 'Canada': 'Canada',
+  'Australia': 'Asie-Pacifique', 'China': 'Asie-Pacifique', 'Hong Kong': 'Asie-Pacifique',
+  'Taiwan': 'Asie-Pacifique', 'South Korea': 'Asie-Pacifique', 'Singapore': 'Asie-Pacifique',
+  'India': 'Asie-Pacifique', 'Brazil': 'Amérique latine', 'Mexico': 'Amérique latine' };
+
+async function allez(url, entetesSup) {
   const c = new AbortController();
   const t = setTimeout(() => c.abort(), DELAI);
   try {
-    const r = await fetch(url, { headers: ENTETES, signal: c.signal });
+    const r = await fetch(url, { headers: Object.assign({}, ENTETES, entetesSup || {}), signal: c.signal });
     return r.ok ? r : null;
   } catch (e) { return null; }
   finally { clearTimeout(t); }
 }
-async function lire(url) {
-  const r = await allez(url);
+async function lire(url, entetesSup) {
+  const r = await allez(url, entetesSup);
   if (!r) return null;
   try { return await r.json(); } catch (e) { return null; }
 }
@@ -114,16 +127,48 @@ async function resoudre(code, nom) {
   return secours;
 }
 
+// ---- Fiche société (secteur + pays) : Yahoo exige un « crumb » obtenu
+// avec un cookie. Mis en cache dans l'instance de la fonction. -------------
+let crumbEnMemoire = null;
+async function obtenirCrumb() {
+  if (crumbEnMemoire) return crumbEnMemoire;
+  try {
+    const r = await fetch('https://fc.yahoo.com', { headers: ENTETES });  // 404 attendu : seul le cookie compte
+    const brut = (typeof r.headers.getSetCookie === 'function')
+      ? r.headers.getSetCookie().join(' ; ')
+      : (r.headers.get('set-cookie') || '');
+    const m = brut.match(/A3=[^;]+/);
+    if (!m) return null;
+    const r2 = await allez('https://query2.finance.yahoo.com/v1/test/getcrumb', { Cookie: m[0] });
+    if (!r2) return null;
+    const c = (await r2.text()).trim();
+    if (c && c.length < 40 && c.indexOf('<') === -1) { crumbEnMemoire = c; return c; }
+    return null;
+  } catch (e) { return null; }
+}
+async function profil(symbole) {
+  const c = await obtenirCrumb();
+  if (!c) return null;
+  const j = await lire(YPROFIL + encodeURIComponent(symbole) + '?modules=assetProfile&crumb=' + encodeURIComponent(c));
+  const res = j && j.quoteSummary && j.quoteSummary.result && j.quoteSummary.result[0];
+  const ap = res && res.assetProfile;
+  if (!ap) return null;
+  return { secteur: SEC_FR[ap.sector] || ap.sector || '',
+           zone: PAYS_ZONE[ap.country] || (ap.country ? 'Monde' : '') };
+}
+
 exports.handler = async (event) => {
   try {
     const p = event.queryStringParameters || {};
     const codes = String(p.codes || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 40);
     const noms = String(p.noms || '').split('|');
-    const resultat = {}, detail = {}, echecs = [], taux = {};
+    const manque = String(p.manque || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 8);
+    const resultat = {}, detail = {}, echecs = [], taux = {}, etiquettes = {}, tickers = {};
     for (let i = 0; i < codes.length; i++) {
       try {
         const q = await resoudre(codes[i].toUpperCase(), (noms[i] || '').trim());
         if (!q) { echecs.push(codes[i]); continue; }
+        tickers[codes[i].toUpperCase()] = q.ticker || '';
         let prix = q.prix;
         if (q.devise && q.devise !== 'EUR') {
           if (!(q.devise in taux)) {
@@ -137,10 +182,24 @@ exports.handler = async (event) => {
                                            confiance: q.confiance || 'pa' };
       } catch (e) { echecs.push(codes[i]); }
     }
+    // Fiches société pour les codes dont l'app réclame le secteur ou la zone.
+    for (const m of manque) {
+      try {
+        let t = tickers[m];
+        if (!t) {
+          const q = await resoudre(m, (noms[codes.map(c => c.toUpperCase()).indexOf(m)] || '').trim());
+          t = q ? (q.ticker || '') : '';
+        }
+        if (!t) continue;
+        const pr = await profil(t);
+        if (pr && (pr.secteur || pr.zone)) etiquettes[m] = pr;
+      } catch (e) { /* l'étiquette est facultative : on continue */ }
+    }
     const diag = Object.keys(resultat).length
       ? 'ok' : 'aucun cours obtenu (Yahoo peut bloquer les IP Netlify)';
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' },
-             body: JSON.stringify({ resultat: resultat, detail: detail, echecs: echecs, diag: diag }) };
+             body: JSON.stringify({ resultat: resultat, detail: detail, echecs: echecs,
+                                   etiquettes: etiquettes, diag: diag }) };
   } catch (err) {
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' },
              body: JSON.stringify({ erreur: String(err && err.message ? err.message : err) }) };
