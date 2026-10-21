@@ -36,8 +36,8 @@
   .signature { margin-top: 3px; font-size: 11px; font-style: italic; color: var(--green); opacity: .85; }
   .maj { margin-top: 4px; font-size: 10px; color: var(--muted); }
   .majrow { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; gap: 8px; }
-  /* Boutons en pilule, degrade bleu-vert ; icone qui tourne pendant
-     la mise a jour des cours (class .tourne) */
+  /* Bouton d'actualisation : pilule visible en degrade bleu-vert,
+     icone qui tourne pendant la mise a jour (class .tourne) */
   .btnmaj {
     display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto;
     background: linear-gradient(135deg, #38BDF8, #34D399);
@@ -156,6 +156,9 @@
   /* Badge « Powered by Netlify » flottant en bas de page : masque
      (a desactiver aussi dans Netlify > Site configuration > Netlify Badge) */
   a[href*="netlify"] { display: none !important; }
+  /* Encadré flottant (contour cyan) injecté par Netlify sur les nouveaux
+     comptes gratuits : masque la coquille entière, quel que soit le réglage */
+  #nl-badge-frame, iframe[src*="hud"], #netlify-badge, .netlify-badge { display: none !important; }
 </style>
 </head>
 <body>
