@@ -127,29 +127,31 @@ async function resoudre(code, nom) {
   return secours;
 }
 
-// ---- Fiche société (secteur + pays) : Yahoo exige un « crumb » obtenu
-// avec un cookie. Mis en cache dans l'instance de la fonction. -------------
+// ---- Fiche société (secteur + pays) : Yahoo exige un cookie ET un « crumb »
+// tous les deux renvoyés à chaque requête. Mis en cache dans l'instance. -----
 let crumbEnMemoire = null;
-async function obtenirCrumb() {
-  if (crumbEnMemoire) return crumbEnMemoire;
+let biscuitEnMemoire = null;
+async function obtenirAcces() {
+  if (crumbEnMemoire && biscuitEnMemoire) return true;
   try {
     const r = await fetch('https://fc.yahoo.com', { headers: ENTETES });  // 404 attendu : seul le cookie compte
     const brut = (typeof r.headers.getSetCookie === 'function')
       ? r.headers.getSetCookie().join(' ; ')
       : (r.headers.get('set-cookie') || '');
     const m = brut.match(/A3=[^;]+/);
-    if (!m) return null;
-    const r2 = await allez('https://query2.finance.yahoo.com/v1/test/getcrumb', { Cookie: m[0] });
-    if (!r2) return null;
+    if (!m) return false;
+    biscuitEnMemoire = m[0];
+    const r2 = await allez('https://query2.finance.yahoo.com/v1/test/getcrumb', { Cookie: biscuitEnMemoire });
+    if (!r2) return false;
     const c = (await r2.text()).trim();
-    if (c && c.length < 40 && c.indexOf('<') === -1) { crumbEnMemoire = c; return c; }
-    return null;
-  } catch (e) { return null; }
+    if (c && c.length < 40 && c.indexOf('<') === -1) { crumbEnMemoire = c; return true; }
+    return false;
+  } catch (e) { return false; }
 }
 async function profil(symbole) {
-  const c = await obtenirCrumb();
-  if (!c) return null;
-  const j = await lire(YPROFIL + encodeURIComponent(symbole) + '?modules=assetProfile&crumb=' + encodeURIComponent(c));
+  if (!(await obtenirAcces())) return null;
+  const j = await lire(YPROFIL + encodeURIComponent(symbole) + '?modules=assetProfile&crumb=' + encodeURIComponent(crumbEnMemoire),
+                       { Cookie: biscuitEnMemoire });
   const res = j && j.quoteSummary && j.quoteSummary.result && j.quoteSummary.result[0];
   const ap = res && res.assetProfile;
   if (!ap) return null;
@@ -183,6 +185,9 @@ exports.handler = async (event) => {
       } catch (e) { echecs.push(codes[i]); }
     }
     // Fiches société pour les codes dont l'app réclame le secteur ou la zone.
+    // diagEtiquettes : petit journal (visible dans la réponse) pour diagnostiquer
+    // un éventuel blocage côté Yahoo sans accès aux journaux Netlify.
+    const notes = [];
     for (const m of manque) {
       try {
         let t = tickers[m];
@@ -190,16 +195,19 @@ exports.handler = async (event) => {
           const q = await resoudre(m, (noms[codes.map(c => c.toUpperCase()).indexOf(m)] || '').trim());
           t = q ? (q.ticker || '') : '';
         }
-        if (!t) continue;
+        if (!t) { notes.push(m + ':pas-de-ticker'); continue; }
         const pr = await profil(t);
-        if (pr && (pr.secteur || pr.zone)) etiquettes[m] = pr;
-      } catch (e) { /* l'étiquette est facultative : on continue */ }
+        if (pr && (pr.secteur || pr.zone)) { etiquettes[m] = pr; notes.push(m + ':ok'); }
+        else notes.push(m + ':fiche-vide(' + t + ')');
+      } catch (e) { notes.push(m + ':erreur'); }
     }
     const diag = Object.keys(resultat).length
       ? 'ok' : 'aucun cours obtenu (Yahoo peut bloquer les IP Netlify)';
+    const diagEtiquettes = notes.join(' | ');
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' },
              body: JSON.stringify({ resultat: resultat, detail: detail, echecs: echecs,
-                                   etiquettes: etiquettes, diag: diag }) };
+                                   etiquettes: etiquettes, diag: diag,
+                                   diagEtiquettes: diagEtiquettes }) };
   } catch (err) {
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' },
              body: JSON.stringify({ erreur: String(err && err.message ? err.message : err) }) };
